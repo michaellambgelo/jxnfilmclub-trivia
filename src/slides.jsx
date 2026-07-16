@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { broadcast, useBroadcast } from './broadcast.js';
 import { resolveAspect, pictureGridLayout } from './pictures.js';
 
@@ -831,12 +831,48 @@ function QuestionSlide({
   );
 }
 
+// Shrink a container's contents to fit its height. Only shrinks (scale caps at
+// 1), so short recaps render unchanged. Mirrors pictureGridLayout's budget-aware
+// sizing, but text wrapping makes shrink non-linear, so it iterates. Scale rides
+// a CSS var so the measure loop can force synchronous reflow and converge in one
+// pass. Re-fits on content change, container resize, and web-font load (metrics
+// change once Oswald / Work Sans arrive).
+function useShrinkToFit(deps) {
+  const ref = useRef(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const MIN = 0.6;
+    const fit = () => {
+      el.style.setProperty('--fit-scale', '1');
+      const budget = el.clientHeight;
+      if (!budget) return;
+      let s = 1;
+      for (let i = 0; i < 24 && el.scrollHeight > budget + 1 && s > MIN; i++) {
+        s = Math.max(MIN, s * Math.min(0.99, budget / el.scrollHeight));
+        el.style.setProperty('--fit-scale', String(s)); // reading scrollHeight next iter forces reflow
+      }
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    let alive = true;
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { if (alive) fit(); });
+    return () => { alive = false; ro.disconnect(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return ref;
+}
+
 // ============================================================
 // SLIDE: ROUND RECAP — single column of 5 questions
 // One round produces two of these slides (questions 1–5, then 6–10) so
-// each prompt can wrap fully without being truncated.
+// each prompt can wrap fully without being truncated. When prompts run long
+// enough to overflow the vertical budget, useShrinkToFit scales the questions
+// (via --fit-scale) so they fit instead of clipping.
 // ============================================================
 function RoundRecap({ round, roundTitle, questions, accent, startIndex = 0, part = "A" }) {
+  const fitRef = useShrinkToFit([questions.join('\n')]);
   const start = startIndex + 1;
   const end = startIndex + questions.length;
   return (
@@ -869,25 +905,26 @@ function RoundRecap({ round, roundTitle, questions, accent, startIndex = 0, part
 
           <RuleBar />
 
-          <div style={{
+          <div ref={fitRef} style={{
+            "--fit-scale": 1,
             marginTop: 24, flex: 1, display: "flex", flexDirection: "column",
-            justifyContent: "center", gap: 14, overflow: "hidden",
+            justifyContent: "center", gap: "calc(14px * var(--fit-scale, 1))", overflow: "hidden",
           }}>
             {questions.map((q, i) => (
               <div key={i} style={{
                 display: "flex", gap: 26, alignItems: "baseline",
-                paddingBottom: 12, borderBottom: `1px solid ${PALETTE.paper}29`,
+                paddingBottom: "calc(12px * var(--fit-scale, 1))", borderBottom: `1px solid ${PALETTE.paper}29`,
                 minWidth: 0,
               }}>
                 <div style={{
-                  fontFamily: displayFont, fontWeight: 700, fontSize: 42,
+                  fontFamily: displayFont, fontWeight: 700, fontSize: "calc(42px * var(--fit-scale, 1))",
                   color: accent.hex, letterSpacing: "0.02em", minWidth: 64,
                   flex: "0 0 auto",
                 }}>
                   {String(startIndex + i + 1).padStart(2, "0")}
                 </div>
                 <div style={{
-                  fontFamily: bodyFont, fontSize: 34, lineHeight: 1.3,
+                  fontFamily: bodyFont, fontSize: "calc(34px * var(--fit-scale, 1))", lineHeight: 1.3,
                   color: PALETTE.paper, fontWeight: 400,
                   flex: 1, minWidth: 0, maxWidth: 1600,
                 }}>
