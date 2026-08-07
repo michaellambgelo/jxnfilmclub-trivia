@@ -19,10 +19,10 @@ The deck has **two URLs** that you open in two separate browser windows on the s
 
 | URL | Mode | Where to open it |
 |---|---|---|
+| [`https://michaellambgelo.gitlab.io/pub-trivia-scaffold/`](https://michaellambgelo.gitlab.io/pub-trivia-scaffold/) | **Display** | The TV / projector / external screen the room watches |
+| [`https://michaellambgelo.gitlab.io/pub-trivia-scaffold/#/control`](https://michaellambgelo.gitlab.io/pub-trivia-scaffold/#/control) | **Control** | Your laptop screen — editor + presenter view |
 | `http://localhost:5173/` | **Display** | The TV / projector / external screen the room watches |
 | `http://localhost:5173/#/control` | **Control** | Your laptop screen — editor + presenter view |
-
-(Swap in the deployed URL if you're hosting from the published site rather than a local dev server.)
 
 The two windows talk live via `BroadcastChannel` (a built-in browser API; no server). Edits in the control window push to the display instantly; navigating in control drives the display.
 
@@ -52,6 +52,22 @@ A live outline of every slide in the deck with the active slide highlighted. Cli
 Cards at the top edit the **Title Slide**, **End Slide**, and **Next Event Slide** strings (eyebrow, hero text, edition, hosts, date, sign-off, next-event details). Below that, cards per round let you edit each question and answer — plus restructure the game: **add/remove questions** within a round (the "N Questions" kicker tracks the count automatically), and **add/remove whole rounds**. Edits are buffered locally — "Save & Push to Display" sends them to the display (and persists to `localStorage`), "Revert" discards.
 
 Bulk editing goes through **Export Deck / Import…**: **Export Deck** is the one export — a JSON file carrying the questions, tiebreakers, picture round (images included), and all game meta, so importing it on another machine restores the whole event. Import also accepts spreadsheet CSVs (`round,round_title,question,answer,subtitle,kicker`, with `TB` rows for tiebreakers) — round count and questions-per-round are detected from the rows — and the older `category,question` writer-template CSV, which opens a category→round mapping dialog.
+
+#### Writing questions in a spreadsheet
+
+Most questions get drafted in a spreadsheet before the event rather than typed in here. Two buttons seed one:
+
+- **Google Sheets Template ↗** opens Google's *Make a copy* dialog on your group's shared template. The writer gets their **own private copy** — nobody else can see it, including you, unless they share it back. Hand this button (or the link behind it) to anyone writing questions. *The scaffold ships with this button hidden — each group makes its own template sheet and sets `SHEET_TEMPLATE_ID` in `src/ControlApp.jsx` (see below).*
+- **CSV Template** downloads the same thing as a file, for Excel or Numbers.
+
+The writer fills in the rows, then `File → Download → Comma-separated values`, and you drop that file into **Import…**. Round count and questions-per-round are read from the rows; the import reports what it loaded, and lands in the editor as unsaved changes so you can review before **Save & Push**.
+
+Two things to know:
+
+- **Sheets exports only the active tab.** Keep the template to one tab.
+- **Never publish a sheet that has real questions in it.** *File → Share → Publish to web* makes it readable by anyone on the internet, and it is not the same as link-sharing. A template is safe to share because it holds no questions; the writers' copies are private by default. Leave it that way.
+
+To build your group's shared template: click **CSV Template**, then in a new Sheet use `File → Import → Upload → Replace spreadsheet` (Separator type **Comma**). Share it *Anyone with the link → Viewer* and put its file ID (from the `/d/<ID>/edit` URL — **not** a `2PACX-…` publish token) in `SHEET_TEMPLATE_ID` in `src/ControlApp.jsx`.
 
 The **Slides to Include** card has the toggle switches that hide/show Prize, Costume Contest, Picture Round, Next Event, and Tiebreakers in the deck.
 
@@ -124,6 +140,10 @@ Two duplication points to know about: `ControlApp.jsx`'s `buildSlideOutline()` m
 The `/new-pub-trivia-deck` Claude Code skill clones this scaffold to `~/Workspace/<slug>-trivia` and swaps every theme-leak point (palette, slide copy, BroadcastChannel name, `localStorage` keys, package name, Vite `base`), then re-fills `DEFAULT_ROUNDS` with real themed trivia questions per round.
 
 Because the skill edits **exact anchor strings**, changing them casually will silently break it. The authoritative anchor table lives in `CLAUDE.md` — read it before renaming constants, palette keys, storage keys, or slide copy.
+
+## Rebranding for a new group or venue
+
+Theming is only one axis. Standing the deck up for a **different group or venue** — new logo, new "Presented at …", new prize, new deploy target — is a separate, mostly orthogonal set of decisions that the skill deliberately does *not* touch (it keeps the venue branding as-is). [`docs/REBRANDING.md`](docs/REBRANDING.md) is the full playbook: a stakeholder-facing asset list (logo, fonts, palette, copy — with priorities and specs), a decision matrix separating the **theme / group / venue / per-night / deploy** axes, and the developer checklist for identifier namespacing and the deploy configuration. The scaffold ships live Fertile Ground branding as the working example of every venue slot.
 
 ## Deploy
 
