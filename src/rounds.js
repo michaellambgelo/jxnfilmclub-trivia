@@ -251,16 +251,25 @@ export function parseQuestionsImport(text) {
       throw new Error(`${where}: "questions" must be an array of strings or { prompt, ... } objects.`);
     }
   });
-  if (!Array.isArray(data.tiebreakers) || !data.tiebreakers.every((t) => typeof t === 'string')) {
-    throw new Error('"tiebreakers" must be an array of strings.');
-  }
-  if (data.tiebreakers.length !== TIEBREAKER_COUNT) {
-    throw new Error(`"tiebreakers" must contain exactly ${TIEBREAKER_COUNT} entries.`);
+  // Tiebreakers are optional: absent, null, or [] all mean "keep the ones the
+  // deck already has" — the key is omitted from the result, and callers must
+  // treat that as leave-alone. This matches parseQuestionsFullCsv, which
+  // returns null for a CSV with no TB rows. A non-empty value still has to be
+  // exactly TIEBREAKER_COUNT strings.
+  const tbGiven = data.tiebreakers !== undefined && data.tiebreakers !== null &&
+    !(Array.isArray(data.tiebreakers) && data.tiebreakers.length === 0);
+  if (tbGiven) {
+    if (!Array.isArray(data.tiebreakers) || !data.tiebreakers.every((t) => typeof t === 'string')) {
+      throw new Error('"tiebreakers" must be an array of strings.');
+    }
+    if (data.tiebreakers.length !== TIEBREAKER_COUNT) {
+      throw new Error(`"tiebreakers" must contain exactly ${TIEBREAKER_COUNT} entries.`);
+    }
   }
   const result = {
     rounds: clone(data.rounds),
-    tiebreakers: [...data.tiebreakers],
   };
+  if (tbGiven) result.tiebreakers = [...data.tiebreakers];
   // Optional version-2 deck-bundle sections. Passed through loosely here —
   // the importer runs pictures through normalizePastes and meta through
   // sanitizeMeta, which coerce shape and drop garbage fields.
@@ -280,34 +289,55 @@ export function parseQuestionsImport(text) {
 }
 
 // ---- CSV writer template + import ---------------------------------------
-// Hosts hand off `buildCsvTemplate()` to writers; the writer fills "category"
-// + "question" cells (answers go in a separate, secret doc), and on import the
-// host maps each discovered category to a round.
+// Hosts hand `buildCsvTemplate()` to writers — either as a download for
+// Excel/Numbers, or as the seed for the shared Google Sheets template
+// (File → Import → Replace spreadsheet). Its header is the full-fidelity
+// format, so a filled-in copy round-trips straight back through
+// parseQuestionsFullCsv with answers intact.
+//
+// It deliberately does NOT emit the legacy `category,question` header: that
+// format has no answer column, so a template seeded from it would route to
+// the category-mapping modal and silently drop every answer.
 
 export function buildCsvTemplate() {
   // Comment lines must stay in a single spreadsheet cell when the writer
-  // opens the CSV in Numbers/Excel. Any line that has a comma or a quote
-  // gets wrapped + escaped so it doesn't spill into column B.
+  // opens the CSV in Sheets/Numbers/Excel. Any line that has a comma or a
+  // quote gets wrapped + escaped so it doesn't spill into column B.
   const csvComment = (line) =>
     line.includes(',') || line.includes('"')
       ? `"${line.replace(/"/g, '""')}"`
       : line;
+  // No comment line may contain a comma. A quoted comment cell defeats Google
+  // Sheets' "Detect automatically" separator guess — it mis-splits the file and
+  // the data rows land in a single column as literal text, which is unusable as
+  // a writer template and won't re-import. Keeping every comment comma-free
+  // means the file imports correctly whatever separator setting is chosen.
   const comments = [
-    '# TRIVIA QUESTIONS — WRITER TEMPLATE',
+    '# PUB TRIVIA — QUESTION TEMPLATE',
     '',
-    '# Replace the categories and questions below with your own.',
-    '# Rows that share a category become one trivia round at import time.',
-    '# DO NOT write answers in this file — share answers with the host privately.',
-    '# If a question contains a comma, wrap the whole question in double quotes.',
+    '# Type your questions in the rows below the header.',
+    '# Rows starting with # are ignored on import — leave them or delete them.',
+    '# Only `round` and `question` are required. Other columns may be left blank.',
+    '# `round` is a grouping key (1 / 2 / 3 …) — NOT the on-screen round number.',
+    '#   Every row sharing a round number becomes one round. Rounds sort numerically.',
+    '# `round_title` / `subtitle` / `kicker` are per-round — first non-empty one wins.',
+    '#   Leave `kicker` blank and it is filled in automatically.',
+    '# Put TB in the round column for sudden-death tiebreakers — exactly 3 or none.',
     '',
   ].map(csvComment);
   const body = [
-    'category,question',
-    'Category 1,Question 1',
-    'Category 1,Question 2',
-    'Category 1,Question 3',
-    'Category 2,Question 1',
-    'Category 2,Question 2',
+    'round,round_title,question,answer,subtitle,kicker',
+    '1,Warm-Up Round,What is the capital of France?,Paris,,',
+    '1,,Which ocean is the largest?,Pacific,,',
+    '2,Food & Drink,Which grain is used to make traditional malt whisky?,Barley,,',
+    // Three TB rows, not one: the importer accepts exactly 3 tiebreakers or
+    // none at all, so a template shipping a single example row would fail to
+    // import the moment a writer left it in place. Tiebreakers are numeric
+    // "closest guess wins" prompts — keep these as obvious placeholders rather
+    // than real-looking venue facts, so nobody ships an invented answer.
+    'TB,,EXAMPLE — replace: how many jellybeans are in the jar?,0,,',
+    'TB,,EXAMPLE — replace: how many pages are in the menu?,0,,',
+    'TB,,EXAMPLE — replace: closest guess wins (numeric answer),0,,',
     '',
   ];
   return [...comments, ...body].join('\n');
@@ -315,9 +345,15 @@ export function buildCsvTemplate() {
 
 // Strip blank lines + `#` comment lines; returns parsed rows with the header
 // row first. Shared by both CSV import formats.
+//
+// "Blank" means every cell is empty, not just a lone empty first cell: a
+// spreadsheet pads every row out to the width of the widest one, so a blank
+// spacer row exported from Google Sheets arrives as `,,,,,` — six empty cells,
+// not one. Matching only single-cell blanks let those through, and the first
+// one then got mistaken for the header row.
 function cleanCsvRows(text) {
   return parseCsv(text)
-    .filter((r) => !(r.length === 1 && r[0].trim() === ''))
+    .filter((r) => !r.every((c) => (c || '').trim() === ''))
     .filter((r) => !(r[0] && r[0].trim().startsWith('#')));
 }
 
