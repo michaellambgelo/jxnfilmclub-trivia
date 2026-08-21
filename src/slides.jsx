@@ -1,6 +1,12 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { broadcast, useBroadcast } from './broadcast.js';
 import { resolveAspect, pictureGridLayout } from './pictures.js';
+import { DEFAULT_META } from './meta.js';
+
+// Rule-list numerals derived from item index — the copy itself lives in
+// meta.js ({ t, d } pairs) so hosts can edit it from the Show Setup tab.
+const ROMAN = ["I", "II", "III", "IV", "V", "VI"];
+const withNumerals = (items) => items.map((it, i) => ({ n: ROMAN[i] ?? String(i + 1), ...it }));
 
 // ============================================================
 // DESIGN SYSTEM — JXN Film Club "Night Shift": noir zine / photocopy collage.
@@ -395,19 +401,13 @@ function TitleSlide({ accent, title }) {
 // ============================================================
 // SLIDE: RULES
 // ============================================================
-function RulesSlide({ accent }) {
-  const rules = [
-    { n: "I",   t: "Phones away",           d: "Screens face down for the whole night. If you need yours, step out and sit the round out." },
-    { n: "II",  t: "One sheet per team",     d: "Every team writes on a single answer sheet — one team name on top, one set of answers turned in." },
-    { n: "III", t: "No looking it up",       d: "Trust your memory and your teammates. Answers found on a screen cost your team the points." },
-    { n: "IV",  t: "Hosts' call is final",   d: "The hosts settle every ruling on the night. No appeals, no rolling the tape back." },
-  ];
+function RulesSlide({ accent, rules }) {
   return (
     <RuleGrid
       label="02 Rules"
       eyebrow="Section I"
       title="House Rules"
-      rules={rules}
+      rules={withNumerals(rules)}
       footerLeft="House Rules"
       footerRight="Read Before Play"
       accent={accent}
@@ -418,7 +418,7 @@ function RulesSlide({ accent }) {
 // ============================================================
 // SLIDE: PRIZE
 // ============================================================
-function PrizeSlide() {
+function PrizeSlide({ prize }) {
   return (
     <section data-label="03 Grand Prize">
       <div style={slideSurface("red")}>
@@ -433,7 +433,7 @@ function PrizeSlide() {
             fontFamily: displayFont, fontWeight: 600, fontSize: TYPE_SCALE.meta,
             letterSpacing: "0.26em", textTransform: "uppercase", color: PALETTE.paper,
           }}>
-            Tonight's Prize
+            {prize.eyebrow}
           </div>
 
           <div style={{
@@ -441,7 +441,7 @@ function PrizeSlide() {
             letterSpacing: "0.03em", textTransform: "uppercase",
             color: PALETTE.paper, marginTop: 22,
           }}>
-            Grand Prize
+            {prize.heading}
           </div>
 
           <div style={{
@@ -459,7 +459,7 @@ function PrizeSlide() {
               fontFamily: displayFont, fontWeight: 700, fontSize: 24, letterSpacing: "0.2em",
               textTransform: "uppercase", whiteSpace: "nowrap",
             }}>
-              ★ WINNER TAKES ALL ★
+              {prize.banner}
             </div>
 
             <div style={{
@@ -467,14 +467,14 @@ function PrizeSlide() {
               fontSize: 220, lineHeight: 1,
               color: PALETTE.ink,
             }}>
-              CURATOR
+              {prize.amount}
             </div>
             <div style={{
               fontFamily: displayFont, fontWeight: 700, fontSize: 44,
               letterSpacing: "0.1em", textTransform: "uppercase",
               color: PALETTE.rust, marginTop: 12,
             }}>
-              FOR A NIGHT
+              {prize.award}
             </div>
           </div>
 
@@ -482,7 +482,7 @@ function PrizeSlide() {
             marginTop: 46, fontFamily: bodyFont, fontStyle: "italic",
             fontSize: 34, color: `${PALETTE.paper}D9`, maxWidth: 900,
           }}>
-            The winning team picks the next screening.
+            {prize.tagline}
           </div>
         </div>
 
@@ -495,19 +495,13 @@ function PrizeSlide() {
 // ============================================================
 // SLIDE: COSTUME CONTEST
 // ============================================================
-function CostumeContestSlide({ accent }) {
-  const rules = [
-    { n: "I",   t: "Open to All Guests",    d: "Any guest can enter — you don't need to be on a trivia team to win." },
-    { n: "II",  t: "On-Theme Costumes",     d: "Costumes must fit tonight's theme. Original concepts welcome if the connection is clear." },
-    { n: "III", t: "Hosts Decide",          d: "The hosts will pick Best Overall. No appeals." },
-    { n: "IV",  t: "Individual Prize",      d: "One winner takes home a small prize of their own." },
-  ];
+function CostumeContestSlide({ accent, costume }) {
   return (
     <RuleGrid
       label="04 Costume Contest"
       eyebrow="Bonus Challenge"
       title="Costume Contest"
-      rules={rules}
+      rules={withNumerals(costume)}
       footerLeft="Costume Contest"
       footerRight="Enter anytime at the host's table."
       accent={accent}
@@ -588,13 +582,14 @@ function RoundOpener({ number, title, subtitle, kicker, label }) {
 // ============================================================
 // SLIDE: ROUND 1 PICTURE-ROUND INSTRUCTIONS
 // ============================================================
-function PictureRoundInstructions({ accent }) {
-  const steps = [
-    { n: "01", t: "Form your team",   d: "Gather your group and pick a team name. Pun-heavy or theme-on-theme is encouraged." },
-    { n: "02", t: "Collect your sheet", d: "One Round 1 picture sheet per team. Grab one from a host." },
-    { n: "03", t: "Identify the films", d: "Identify the film, the director, or the year. Write your answer next to each numbered still." },
-    { n: "04", t: "Return your answers", d: "Hand the sheet back to the hosts before Round 2 begins." },
-  ];
+function PictureRoundInstructions({ accent, pictureRound, nextRound = 2 }) {
+  // Step copy lives in meta.pictureRound.steps; "{nextRound}" is replaced with
+  // the display number of the first trivia round so the copy survives
+  // renumbering. Card numbers derive from index.
+  const sub = (s) => s.replace(/\{nextRound\}/g, String(nextRound));
+  const steps = pictureRound.steps.map((s, i) => ({
+    n: String(i + 1).padStart(2, "0"), t: sub(s.t), d: sub(s.d),
+  }));
   return (
     <section data-label="05 Round 1 Instructions">
       <div style={slideBase}>
@@ -1183,7 +1178,7 @@ function PictureRoundRecap({ items, accent, pictureRound }) {
               fontFamily: bodyFont, fontStyle: "italic",
               fontSize: 32, color: `${PALETTE.paper}B3`,
             }}>
-              {pictureRound?.instruction ?? "Identify the film, the director, or the year."}
+              {pictureRound?.instruction ?? DEFAULT_META.pictureRound.instruction}
             </div>
           </div>
           <RuleBar />
@@ -1212,19 +1207,13 @@ function PictureRoundRecap({ items, accent, pictureRound }) {
 // ============================================================
 // SLIDE: TIEBREAKER INTRO — Final Wager rules (Final Jeopardy style)
 // ============================================================
-function TiebreakerIntroSlide({ accent }) {
-  const rules = [
-    { n: "I",   t: "Place Your Wager",       d: "Each tied team secretly writes a wager from 0 up to their total score before the question is read." },
-    { n: "II",  t: "One Question, One Answer", d: "Hosts read the prompt. Each team writes one answer on their sheet. No conferring." },
-    { n: "III", t: "Reveal & Adjust",         d: "Correct answers add the wager to your score. Wrong answers subtract it. Highest total wins." },
-    { n: "IV",  t: "Up to Three Tries",       d: "Still tied after wagers are settled? We play again with a new question — up to a maximum of three." },
-  ];
+function TiebreakerIntroSlide({ accent, wager }) {
   return (
     <RuleGrid
       label="Tiebreakers · Final Wager"
       eyebrow="Sudden Death · Final Wager"
       title="Tiebreakers"
-      rules={rules}
+      rules={withNumerals(wager)}
       footerLeft="Final Wager"
       footerRight="Only If Tied"
       accent={accent}

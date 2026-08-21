@@ -87,16 +87,16 @@ function App() {
   slides.push(<TitleSlide key="title" tweaks={tweaks} accent={accent} title={meta.title} />);
 
   // 2. Rules
-  slides.push(<RulesSlide key="rules" tweaks={tweaks} accent={accent} />);
+  slides.push(<RulesSlide key="rules" tweaks={tweaks} accent={accent} rules={meta.rules.items} />);
 
   // 3. Prize (toggleable)
   if (meta.show.prize) {
-    slides.push(<PrizeSlide key="prize" tweaks={tweaks} accent={accent} />);
+    slides.push(<PrizeSlide key="prize" tweaks={tweaks} accent={accent} prize={meta.prize} />);
   }
 
   // 4. Costume Contest (toggleable)
   if (meta.show.costumeContest) {
-    slides.push(<CostumeContestSlide key="costume" tweaks={tweaks} accent={accent} />);
+    slides.push(<CostumeContestSlide key="costume" tweaks={tweaks} accent={accent} costume={meta.costume.items} />);
   }
 
   // 5-8. Picture Round (toggleable as a unit: opener + instructions + intermission + recap)
@@ -106,13 +106,21 @@ function App() {
         key="r1-open"
         label="05 Round 1 Opener"
         number={1}
-        title="Picture Round"
-        subtitle="Ten stills, no titles. Played on paper — the hosts will hand it out."
-        kicker="On Paper, Not On Screen"
+        title={meta.pictureRound.openerTitle}
+        subtitle={meta.pictureRound.openerSubtitle}
+        kicker={meta.pictureRound.openerKicker}
         tweaks={tweaks} accent={accent}
       />
     );
-    slides.push(<PictureRoundInstructions key="r1-instr" tweaks={tweaks} accent={accent} />);
+    slides.push(
+      <PictureRoundInstructions
+        key="r1-instr"
+        tweaks={tweaks}
+        accent={accent}
+        pictureRound={meta.pictureRound}
+        nextRound={rounds[0] ? displayRoundNumber(rounds[0].n, true) : 2}
+      />
+    );
     slides.push(
       <IntermissionSlide key="int-r1" label="Intermission · Round 01"
         nextRound={rounds[0] ? displayRoundNumber(rounds[0].n, true) : undefined}
@@ -221,7 +229,7 @@ function App() {
   // Tiebreakers — Final Wager (Final Jeopardy style) after the End slide.
   // Skip past these unless teams are tied; advance into them only when needed.
   if (meta.show.tiebreakers) {
-    slides.push(<TiebreakerIntroSlide key="tb-intro" tweaks={tweaks} accent={accent} />);
+    slides.push(<TiebreakerIntroSlide key="tb-intro" tweaks={tweaks} accent={accent} wager={meta.wager.items} />);
     tiebreakers.forEach((q, i) => {
       const data = normalizeQuestion(q);
       slides.push(

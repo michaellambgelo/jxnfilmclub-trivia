@@ -5,11 +5,12 @@
 // Drawn directly on a 2D canvas — no html2canvas dependency, no DOM clones.
 
 import { DEFAULT_ASPECT, pictureGridLayout } from './pictures.js';
+import { DEFAULT_META } from './meta.js';
 
 // Fallback instruction line printed under the handout title. Callers (the
 // control window) pass the per-game value from meta.pictureRound; this keeps
 // the bare renderHandoutCanvas(items) call working on its own.
-const DEFAULT_HANDOUT_INSTRUCTION = 'Identify the film, the director, or the year.';
+const DEFAULT_HANDOUT_INSTRUCTION = DEFAULT_META.pictureRound.instruction;
 
 // Default cell render options — mirrors meta.pictureRound so the bare
 // renderHandoutCanvas(items) call reproduces the historical layout.
