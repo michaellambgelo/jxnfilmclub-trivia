@@ -1727,6 +1727,10 @@ function buildSlideOutline(rounds, tiebreakers = [], meta = DEFAULT_META) {
     });
   });
   list.push({ key: 'end', label: `End — ${endLines || 'Thanks for Playing'}` });
+  // Mirrors App.jsx: Join sits between End and Next Event.
+  if (meta.show?.joinClub ?? true) {
+    list.push({ key: 'join-club', label: `Join the Club — ${meta.joinClub?.url || 'QR code'}` });
+  }
   if (meta.show?.nextEvent ?? true) {
     list.push({ key: 'next-event', label: `Next Event — ${meta.nextEvent?.date || 'TBA'}` });
   }

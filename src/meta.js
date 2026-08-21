@@ -35,12 +35,23 @@ export const DEFAULT_META = {
     venue: "Jackson, MS",
     detail: "Same teams welcome back. Bring someone who argues about films.",
   },
+  // Join-the-club promo slide (JoinClubSlide). `url` is shown as text AND is
+  // what public/join-qr.svg encodes — if you change it, regenerate the QR
+  // (see the comment above JoinClubSlide in slides.jsx) or the code and the
+  // printed address will disagree, which nobody in the room can detect.
+  joinClub: {
+    eyebrow: "JXN Film Club",
+    hero: "Join our digital clubhouse",
+    url: "join.jxnfilm.club",
+    detail: "Scan for screenings, the members directory, and what the club is watching. Membership is public — your email address is always private.",
+  },
   show: {
     prize: true,
     costumeContest: false,
     pictureRound: true,
     tiebreakers: true,
     nextEvent: true,
+    joinClub: true,
   },
   // House rules (RulesSlide). Items are { t: title, d: detail }; the Roman
   // numerals are derived from index at render, not stored. Fixed count — the
@@ -118,6 +129,7 @@ function clone(meta) {
     title: { ...meta.title },
     end: { ...meta.end },
     nextEvent: { ...meta.nextEvent },
+    joinClub: { ...meta.joinClub },
     show: { ...meta.show },
     rules: { items: meta.rules.items.map((it) => ({ ...it })) },
     prize: { ...meta.prize },
@@ -153,6 +165,7 @@ function withDefaults(parsed) {
     title: { ...DEFAULT_META.title, ...(parsed?.title || {}) },
     end: { ...DEFAULT_META.end, ...(parsed?.end || {}) },
     nextEvent: { ...DEFAULT_META.nextEvent, ...(parsed?.nextEvent || {}) },
+    joinClub: { ...DEFAULT_META.joinClub, ...(parsed?.joinClub || {}) },
     show: { ...DEFAULT_META.show, ...(parsed?.show || {}) },
     rules: { items: sanitizeItems(parsed?.rules?.items, DEFAULT_META.rules.items) },
     // Explicit string picks (matching display's strictness) so non-string

@@ -1344,9 +1344,87 @@ function NextEventSlide({ accent, nextEvent }) {
   );
 }
 
+// ============================================================
+// SLIDE: JOIN THE CLUB
+// A QR code the room can scan while scores are being tallied. The code is a
+// committed static SVG (public/join-qr.svg, qrencode -l H) rather than a
+// runtime API call or a QR library: the deck makes no third-party requests,
+// and the URL never changes, so there is nothing to generate at run time.
+// Regenerate with:
+//   qrencode -t SVG -l H -m 2 -s 8 -o public/join-qr.svg "https://join.jxnfilm.club"
+// Dark-on-light is deliberate — scanners want that polarity, so the code sits
+// on a paper card rather than being inverted onto the ink background.
+// ============================================================
+function JoinClubSlide({ accent, joinClub }) {
+  const j = joinClub || {};
+  return (
+    <section data-label="Join the Club">
+      <div style={slideBase}>
+        <Frame />
+
+        <div style={{
+          padding: `${SPACING.paddingTop}px ${SPACING.paddingX}px ${SPACING.paddingBottom}px`,
+          height: "100%", display: "flex", alignItems: "center", gap: 104,
+        }}>
+          <div style={{
+            flex: "none", background: PALETTE.paper,
+            border: `3px solid ${PALETTE.inkDeep}`,
+            boxShadow: hardShadow(12),
+            padding: 26, lineHeight: 0,
+          }}>
+            <img
+              src={`${import.meta.env.BASE_URL}join-qr.svg`}
+              alt={`QR code linking to ${j.url || ""}`}
+              style={{ display: "block", width: 430, height: 430 }}
+            />
+          </div>
+
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {j.eyebrow && <Eyebrow accentHex={accent.hex}>{j.eyebrow}</Eyebrow>}
+
+            {j.hero && (
+              <div style={{
+                fontFamily: heroFont, fontWeight: 900, fontStyle: "italic",
+                fontSize: 96, lineHeight: 0.98, marginTop: 30,
+                color: PALETTE.paper,
+              }}>
+                {j.hero}
+              </div>
+            )}
+
+            <RuleBar />
+
+            {j.url && (
+              <div style={{
+                marginTop: 40, fontFamily: displayFont, fontWeight: 700, fontSize: 76,
+                letterSpacing: "0.04em", textTransform: "lowercase",
+                color: accent.hex, textShadow: hardShadow(6),
+              }}>
+                {j.url}
+              </div>
+            )}
+
+            {j.detail && (
+              <div style={{
+                marginTop: 34, fontFamily: bodyFont, fontStyle: "italic",
+                fontWeight: 400, fontSize: 34, lineHeight: 1.4,
+                color: `${PALETTE.paper}B3`, maxWidth: 820,
+              }}>
+                {j.detail}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <FooterBar left="Join the Club" right={j.url} accentHex={accent.hex} />
+      </div>
+    </section>
+  );
+}
+
 export {
   TitleSlide, RulesSlide, PrizeSlide, CostumeContestSlide, RoundOpener,
   PictureRoundInstructions, QuestionSlide, RoundRecap, PictureRoundRecap,
-  IntermissionSlide, TiebreakerIntroSlide, EndSlide, NextEventSlide,
+  IntermissionSlide, TiebreakerIntroSlide, EndSlide, NextEventSlide, JoinClubSlide,
   ACCENTS, PALETTE,
 };

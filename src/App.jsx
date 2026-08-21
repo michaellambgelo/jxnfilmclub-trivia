@@ -3,6 +3,7 @@ import {
   ACCENTS, TitleSlide, RulesSlide, PrizeSlide, CostumeContestSlide,
   RoundOpener, PictureRoundInstructions, IntermissionSlide, QuestionSlide,
   RoundRecap, PictureRoundRecap, TiebreakerIntroSlide, EndSlide, NextEventSlide,
+  JoinClubSlide,
 } from './slides.jsx';
 import { loadRounds, loadTiebreakers, recapSplitsFor, normalizeQuestion, displayRoundNumber } from './rounds.js';
 import { loadPastes, mergeItems } from './pictures.js';
@@ -224,8 +225,15 @@ function App() {
   // reached by hitting Next when there's an actual tie at the end of play.
   slides.push(<EndSlide key="end" tweaks={tweaks} accent={accent} end={meta.end} />);
 
+  // Join the club — sits between Thanks and Next Event so the QR is on screen
+  // during the dead time while hosts tally scores, which is when the room is
+  // seated, idle, and holding a phone.
+  if (meta.show.joinClub) {
+    slides.push(<JoinClubSlide key="join-club" tweaks={tweaks} accent={accent} joinClub={meta.joinClub} />);
+  }
+
   // Next-event announcement — the natural end-of-night path flows
-  // Thanks → Next Event; tiebreakers stay parked past it as the
+  // Thanks → Join → Next Event; tiebreakers stay parked past it as the
   // only-if-tied overflow.
   if (meta.show.nextEvent) {
     slides.push(<NextEventSlide key="next-event" tweaks={tweaks} accent={accent} nextEvent={meta.nextEvent} />);
