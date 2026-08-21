@@ -8,7 +8,7 @@
 
 const COUNT = 10;
 export const PICTURE_COUNT = COUNT;
-const STORAGE_KEY = 'pub-trivia-scaffold.pictures';
+const STORAGE_KEY = 'jxnfilmclub-trivia.pictures';
 
 // Static fallbacks — predictable on-disk paths under public/images/. Decks
 // that commit images there (e.g. deployed themed forks) get them served

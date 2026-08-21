@@ -10,5 +10,5 @@ else
 fi
 # GitLab Pages deploys via the `pages` job in .gitlab-ci.yml on push to main.
 # No watch — the router skips workflow-watch for GitLab hosts.
-echo "::deploy:target=pages:url=https://michaellambgelo.gitlab.io/pub-trivia-scaffold/"
+echo "::deploy:target=pages:url=https://michaellambgelo.gitlab.io/jxnfilmclub-trivia/"
 echo "::deploy:target=pages:end:status=ok"

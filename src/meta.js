@@ -5,46 +5,45 @@
 
 import { PICTURE_FITS, PICTURE_ASPECTS } from './pictures.js';
 
-const STORAGE_KEY = 'pub-trivia-scaffold.meta';
+const STORAGE_KEY = 'jxnfilmclub-trivia.meta';
 
 export const DEFAULT_META = {
   title: {
-    eyebrow: "Presented at Fertile Ground",
+    eyebrow: "Presented by JXN Film Club",
     // Optional secondary line between the eyebrow and the edition name.
     // Blank by default — the design leads with the edition hero. Slides
     // uppercase via CSS, so store display case here.
     hero: "",
-    edition: "Taproom Trivia",
-    // Gold line under the edition hero. Defaults follow the trivia-scorer
-    // production naming ("Fertile Ground Taproom Trivia" → Summer Series /
-    // Autumn Series); hosts append the event number per night ("Summer
-    // Series #2").
-    tagline: "Summer Series",
-    hosts: "Jack Smith · Michael Lamb",
-    footerDate: "July 7 · 2026",
+    edition: "Film Club Trivia",
+    // Highlight line under the edition hero — the deck's standing subtitle.
+    // Hosts can append an event number per night ("Reel Knowledge #2").
+    tagline: "Reel Knowledge",
+    hosts: "JXN Film Club",
+    // Blank by default — the host fills the date in live, per event.
+    footerDate: "",
   },
   end: {
     hero1: "Thanks For",
-    hero2: "Playing.",
+    hero2: "Watching.",
     subtitle: "Hosts Tallying Scores · Stand By",
   },
   // Next-event announcement slide (after End, before tiebreakers).
   nextEvent: {
     eyebrow: "Before You Go",
-    hero: "Next Trivia Night",
+    hero: "Next Screening",
     date: "TBA",
-    venue: "Fertile Ground",
-    detail: "Same teams welcome back. Bring a friend.",
+    venue: "Jackson, MS",
+    detail: "Same teams welcome back. Bring someone who argues about films.",
   },
   show: {
     prize: true,
-    costumeContest: true,
+    costumeContest: false,
     pictureRound: true,
     tiebreakers: true,
     nextEvent: true,
   },
   pictureRound: {
-    instruction: "Identify the character, place, ship or creature.",
+    instruction: "Identify the film, the director, or the year.",
     // How picture cells render: "cover" crops images to fill, "contain"
     // letterboxes the whole image (e.g. a flag round). `aspect` is a key into
     // PICTURE_ASPECTS. Both are runtime-editable in the Picture Round card.

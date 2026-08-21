@@ -1,13 +1,15 @@
-# Pub Trivia Scaffold
+# JXN Film Club Trivia
 
-The source-of-truth for browser-only **pub trivia** presentation decks — and a hostable **General Trivia** deck in its own right. Teams play across rounds of questions on written paper sheets, hosts grade per round. Plus an optional picture round (10 images, played from a handout), optional tiebreakers, and a next-event announcement slide.
+The browser-only presentation deck for **JXN Film Club trivia nights**. Teams play across rounds of questions on written paper sheets, hosts grade per round. Plus an optional picture round (10 images, played from a handout), optional tiebreakers, and a next-event announcement slide.
 
-The deck ships ready to host: 4 rounds × 10 real general-knowledge questions under a "GENERAL TRIVIA" title slide, with the round count and questions-per-round fully editable from the control window (or via CSV import).
+The deck ships ready to host: 4 rounds × 10 questions, with the round count and questions-per-round fully editable from the control window (or via CSV import).
+
+Forked from [`pub-trivia-scaffold`](https://gitlab.com/michaellambgelo/pub-trivia-scaffold), which stays the source-of-truth scaffold that `/new-pub-trivia-deck` clones. **This repo is a deck, not a scaffold** — the skill must never target it. The Night Shift look and the club's slide copy are the product here, not theme-leak points waiting to be replaced.
 
 Two audiences, two halves of this document:
 
 - **[Instructions for Hosts](#instructions-for-hosts)** — running an event: the two windows, game flow, the control tabs, casting to a TV.
-- **[Instructions for Developers](#instructions-for-developers)** — building, deploying, the file layout, and how themed decks are produced.
+- **[Instructions for Developers](#instructions-for-developers)** — building, deploying, the file layout, and how this deck relates to the scaffold.
 
 ---
 
@@ -19,8 +21,8 @@ The deck has **two URLs** that you open in two separate browser windows on the s
 
 | URL | Mode | Where to open it |
 |---|---|---|
-| [`https://michaellambgelo.gitlab.io/pub-trivia-scaffold/`](https://michaellambgelo.gitlab.io/pub-trivia-scaffold/) | **Display** | The TV / projector / external screen the room watches |
-| [`https://michaellambgelo.gitlab.io/pub-trivia-scaffold/#/control`](https://michaellambgelo.gitlab.io/pub-trivia-scaffold/#/control) | **Control** | Your laptop screen — editor + presenter view |
+| [`https://michaellambgelo.gitlab.io/jxnfilmclub-trivia/`](https://michaellambgelo.gitlab.io/jxnfilmclub-trivia/) | **Display** | The TV / projector / external screen the room watches |
+| [`https://michaellambgelo.gitlab.io/jxnfilmclub-trivia/#/control`](https://michaellambgelo.gitlab.io/jxnfilmclub-trivia/#/control) | **Control** | Your laptop screen — editor + presenter view |
 | `http://localhost:5173/` | **Display** | The TV / projector / external screen the room watches |
 | `http://localhost:5173/#/control` | **Control** | Your laptop screen — editor + presenter view |
 
@@ -57,7 +59,7 @@ Bulk editing goes through **Export Deck / Import…**: **Export Deck** is the on
 
 Most questions get drafted in a spreadsheet before the event rather than typed in here. Two buttons seed one:
 
-- **Google Sheets Template ↗** opens Google's *Make a copy* dialog on your group's shared template. The writer gets their **own private copy** — nobody else can see it, including you, unless they share it back. Hand this button (or the link behind it) to anyone writing questions. *The scaffold ships with this button hidden — each group makes its own template sheet and sets `SHEET_TEMPLATE_ID` in `src/ControlApp.jsx` (see below).*
+- **Google Sheets Template ↗** opens Google's *Make a copy* dialog on your group's shared template. The writer gets their **own private copy** — nobody else can see it, including you, unless they share it back. Hand this button (or the link behind it) to anyone writing questions. *This deck ships with the button hidden — make the club's own template sheet and set `SHEET_TEMPLATE_ID` in `src/ControlApp.jsx` (see below).*
 - **CSV Template** downloads the same thing as a file, for Excel or Numbers.
 
 The writer fills in the rows, then `File → Download → Comma-separated values`, and you drop that file into **Import…**. Round count and questions-per-round are read from the rows; the import reports what it loaded, and lands in the editor as unsaved changes so you can review before **Save & Push**.
@@ -135,22 +137,38 @@ src/
 
 Two duplication points to know about: `ControlApp.jsx`'s `buildSlideOutline()` mirrors `App.jsx`'s slide composition by hand (add a slide in one, update the other), and the picture-round cell geometry is centralized in `pictures.js` so the slide, the canvas handout, and the editor preview crop identically.
 
-## How themed decks are produced
+## Relationship to the scaffold
 
-The `/new-pub-trivia-deck` Claude Code skill clones this scaffold to `~/Workspace/<slug>-trivia` and swaps every theme-leak point (palette, slide copy, BroadcastChannel name, `localStorage` keys, package name, Vite `base`), then re-fills `DEFAULT_ROUNDS` with real themed trivia questions per round.
+This deck was forked out of `pub-trivia-scaffold` and keeps its engine, but it is **not** a scaffold. `/new-pub-trivia-deck` clones `~/Workspace/pub-trivia-scaffold` — never this repo. The club's palette, type, and slide copy are the product here; treating them as theme-leak anchors to be swapped would delete the deck.
 
-Because the skill edits **exact anchor strings**, changing them casually will silently break it. The authoritative anchor table lives in `CLAUDE.md` — read it before renaming constants, palette keys, storage keys, or slide copy.
+Every identifier is namespaced `jxnfilmclub-trivia` — the package name, the `BroadcastChannel` name, the `localStorage` keys, and the JSON export type. Because the export type is namespaced, a deck bundle exported from the scaffold or from another sibling will not import here until you retag its `type` field.
 
-## Rebranding for a new group or venue
+Engine fixes worth sharing get ported back to the scaffold by hand. There is no automatic sync in either direction.
 
-Theming is only one axis. Standing the deck up for a **different group or venue** — new logo, new "Presented at …", new prize, new deploy target — is a separate, mostly orthogonal set of decisions that the skill deliberately does *not* touch (it keeps the venue branding as-is). [`docs/REBRANDING.md`](docs/REBRANDING.md) is the full playbook: a stakeholder-facing asset list (logo, fonts, palette, copy — with priorities and specs), a decision matrix separating the **theme / group / venue / per-night / deploy** axes, and the developer checklist for identifier namespacing and the deploy configuration. The scaffold ships live Fertile Ground branding as the working example of every venue slot.
+## Look and type
+
+The deck wears JXN Film Club's **Night Shift** identity: ink black ground (`#100f0e`), signal red (`#d7321f`), paper white type (`#e8e3d8`). Square corners everywhere, borders over shadows, solid colors, no gradients on chrome.
+
+Three voices, all **self-hosted** from `public/fonts/` — no Google Fonts, no third-party requests at runtime:
+
+| Role | Face | Rendered as |
+|---|---|---|
+| Hero | Playfair Display | 900 italic — the signature |
+| Display | Oswald | uppercase, wide tracking — labels and headings |
+| Body | Newsreader | the reading voice |
+
+Palette values track `~/Workspace/jxnfilmclub/css/tokens.css`, the club's design tokens. If the club's tokens move, move these with them.
+
+## Rebranding
+
+[`docs/REBRANDING.md`](docs/REBRANDING.md) is the playbook inherited from the scaffold: an asset list (logo, fonts, palette, copy — with priorities and specs), a decision matrix separating the **theme / group / venue / per-night / deploy** axes, and the developer checklist for identifier namespacing and deploy configuration. It is the pass that produced this deck; read it if you stand another one up.
 
 ## Deploy
 
-Auto-deploys to GitLab Pages via `.gitlab-ci.yml` on every push to `main`. The subpath base is `/pub-trivia-scaffold/` (set in `vite.config.js`); image fallbacks in `src/pictures.js` use `import.meta.env.BASE_URL` so they resolve in both dev (`/`) and prod. Live at `https://michaellambgelo.gitlab.io/pub-trivia-scaffold/`.
+Auto-deploys to GitLab Pages via `.gitlab-ci.yml` on every push to `main`. The subpath base is `/jxnfilmclub-trivia/` (set in `vite.config.js`); image fallbacks in `src/pictures.js` use `import.meta.env.BASE_URL` so they resolve in both dev (`/`) and prod. Live at `https://michaellambgelo.gitlab.io/jxnfilmclub-trivia/`.
 
 The `/#/control` route is intentionally ungated: every visitor's browser gets its own isolated `localStorage`, so writes only ever land in that visitor's own browser and every fresh session loads the `DEFAULT_*` content.
 
 ## Further reading
 
-`CLAUDE.md` in this repo is the deep architectural reference — broadcast message types, the import/export formats, the palette naming convention, per-module notes, and the anchor strings the skill replaces.
+`CLAUDE.md` in this repo is the deep architectural reference — broadcast message types, the import/export formats, the palette naming convention, per-module notes, and the branding sites that make this deck the club's rather than the scaffold's.

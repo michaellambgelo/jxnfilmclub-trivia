@@ -3,7 +3,7 @@
 
 import { useEffect } from 'react';
 
-const CHANNEL_NAME = 'pub-trivia-scaffold';
+const CHANNEL_NAME = 'jxnfilmclub-trivia';
 
 let _channel = null;
 function getChannel() {

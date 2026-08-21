@@ -27,7 +27,7 @@ const ROUND_ACCENTS = {
   // 5: "accent-gold",
 };
 // Global accent — themed forks set this to their signature ACCENTS key.
-const DEFAULT_ACCENT = "accent-gold";
+const DEFAULT_ACCENT = "accent-red";
 function accentFor(n, global) {
   return ACCENTS[ROUND_ACCENTS[n]] || global;
 }
@@ -107,8 +107,8 @@ function App() {
         label="05 Round 1 Opener"
         number={1}
         title="Picture Round"
-        subtitle="A page of images. Played from a paper sheet handed out by the hosts."
-        kicker="On Paper"
+        subtitle="Ten stills, no titles. Played on paper — the hosts will hand it out."
+        kicker="On Paper, Not On Screen"
         tweaks={tweaks} accent={accent}
       />
     );

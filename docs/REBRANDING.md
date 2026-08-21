@@ -1,5 +1,18 @@
 # Rebranding Playbook
 
+> **Inherited document — read this first.**
+>
+> This file came over from `pub-trivia-scaffold` unchanged. **Every "current value" below is
+> the scaffold's Fertile Ground example, not this deck's.** This deck is JXN Film Club, on the
+> "Night Shift" brand: ink black `#100f0e`, signal red `#d7321f`, paper `#e8e3d8`, self-hosted
+> Playfair Display / Oswald / Newsreader, all radii square. See `CLAUDE.md` for the live values.
+>
+> It is kept for two things that are still true and still useful: the **asset list** (what a
+> stakeholder has to supply, with specs and priorities) and the **decision matrix** separating
+> the theme / group / venue / per-night / deploy axes. Read it if you stand another deck up.
+> Do not read it as a description of this repo, and do not treat the branding it describes as
+> theme-leak points waiting to be swapped — here, the club's look *is* the product.
+
 **Purpose:** everything needed to stand this deck up for a **new group or venue** — the assets a stakeholder must supply, the decisions that have to be made, and the code sites where each one lands.
 
 The scaffold ships **live Fertile Ground branding as its working example** (logo, "Presented at Fertile Ground", the gift-card prize slide). That's deliberate: every value below is real, so the shape of what you're replacing is never ambiguous. This doc marks every place a new group substitutes its own. Nothing here changes the trivia engine itself.

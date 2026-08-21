@@ -3,13 +3,14 @@ import { broadcast, useBroadcast } from './broadcast.js';
 import { resolveAspect, pictureGridLayout } from './pictures.js';
 
 // ============================================================
-// DESIGN SYSTEM — Theme-neutral scaffold; clone via /new-pub-trivia-deck and override PALETTE
-// Pulp-poster look: flat solid surfaces, hard offset shadows (no glows),
-// an inset border frame on every slide, and red-background feature slides
-// (Prize, Round Openers, Intermissions).
+// DESIGN SYSTEM — JXN Film Club "Night Shift": noir zine / photocopy collage.
+// Ink-black ground, signal-red accent, paper-white type. Flat solid surfaces,
+// hard offset shadows (no glows), a film-grain overlay and an inset border
+// frame on every slide, and red-background feature slides (Prize, Round
+// Openers, Intermissions). Mirrors ~/Workspace/jxnfilmclub/css/tokens.css.
 // ============================================================
 const TYPE_SCALE = {
-  display: 132,   // hero lines (Alfa Slab One)
+  display: 132,   // hero lines (Playfair Display)
   title: 92,      // section / round titles
   subtitle: 48,   // rule titles, secondary headers
   body: 30,       // body copy
@@ -25,43 +26,51 @@ const SPACING = {
   itemGap: 28,
 };
 
+// Night Shift has no third color, so the four presets are re-tuned to one
+// family — red, paper-white, coral, deep red. The KEYS are internal ids and
+// never change (App.jsx's DEFAULT_ACCENT / ROUND_ACCENTS point at them); only
+// the hex/glow/name do.
 const ACCENTS = {
-  "accent-blue":  { hex: "#5B8DD9", glow: "rgba(91, 141, 217, 0.32)", name: "BLUE" },
-  "accent-green": { hex: "#4E9A6A", glow: "rgba(78, 154, 106, 0.32)", name: "GREEN" },
-  "accent-red":   { hex: "#C8201E", glow: "rgba(200, 32, 30, 0.35)", name: "RED" },
-  "accent-gold":  { hex: "#E2A828", glow: "rgba(226, 168, 40, 0.32)", name: "GOLD" },
+  "accent-blue":  { hex: "#e8e3d8", glow: "rgba(232, 227, 216, 0.30)", name: "PAPER" },
+  "accent-green": { hex: "#e8604f", glow: "rgba(232, 96, 79, 0.32)", name: "CORAL" },
+  "accent-red":   { hex: "#d7321f", glow: "rgba(215, 50, 31, 0.35)", name: "RED" },
+  "accent-gold":  { hex: "#b52a19", glow: "rgba(181, 42, 25, 0.32)", name: "DEEP RED" },
 };
 
 // ⚠️ PALETTE naming convention: `ink` is "the slide background color" and
 // `paper` is "the primary text color" — they are NOT semantic indicators
 // of light vs dark. The scaffold has shipped light-bg/dark-text and
-// dark-bg/light-text (current: navy bg / cream text) using the same key
-// names. Themed forks invert the VALUES but keep the KEYS.
+// dark-bg/light-text (current: ink bg / paper text) using the same key
+// names. Rebrands invert the VALUES but keep the KEYS.
 // `inkDeep` is the near-black outline + hard-shadow token (pulp-poster
 // borders and offset shadows); `rust` is the structural red (rule bars,
 // red-background slides, chips); `rustDeep` is the darker red used for the
-// question-number offset shadow; `gold` is the highlight (the scaffold's
-// DEFAULT_ACCENT points at the matching ACCENTS entry).
+// question-number offset shadow; `gold` is the highlight slot — a slot name,
+// not a color claim: Night Shift has no third color, so it carries the
+// paper-white `--ink-strong` and the accent duty falls to `rust`.
 // Inline alpha-hex (e.g. `${PALETTE.paper}47` for ~28% alpha) is used
 // throughout for translucent frames, hairlines, and dimmed text. Prefer
 // alpha-hex on a PALETTE token over literal `rgba(...)` so palette swaps
-// in themed forks track automatically.
+// track automatically.
 const PALETTE = {
-  ink: "#1A2A4A",            // slide background (navy)
-  inkDeep: "#1A1410",        // outline + hard-shadow near-black
-  paper: "#F2E8CF",          // primary text color (cream)
-  paperDim: "#F2E8CF99",     // secondary/muted text (cream @ 60%)
-  rust: "#C8201E",           // structural red
-  rustDeep: "#9A1716",       // question-number shadow red
-  gold: "#E2A828",           // highlight gold
+  ink: "#100f0e",            // slide background (ink black — tokens --bg)
+  inkDeep: "#000000",        // outline + hard-shadow black (darker than ink)
+  paper: "#e8e3d8",          // primary text color (paper white — tokens --ink)
+  paperDim: "#e8e3d899",     // secondary/muted text (paper @ 60%)
+  rust: "#d7321f",           // structural red (tokens --brand)
+  rustDeep: "#b52a19",       // question-number shadow red (tokens --brand-dark)
+  gold: "#f0ebe0",           // highlight slot — paper-white (tokens --ink-strong)
 };
 
 // ============================================================
 // SHARED STYLE OBJECTS
 // ============================================================
-const displayFont = "'Oswald', 'Bebas Neue', Impact, sans-serif";
-const heroFont = "'Alfa Slab One', 'Oswald', Georgia, serif";
-const bodyFont = "'Work Sans', system-ui, sans-serif";
+// Three voices, all self-hosted (@font-face lives in index.html):
+// Playfair Display 900 italic is the signature, Oswald uppercase is the
+// counterweight, Newsreader reads.
+const displayFont = "'Oswald', 'Helvetica Neue', Arial, sans-serif";
+const heroFont = "'Playfair Display', Georgia, 'Times New Roman', serif";
+const bodyFont = "'Newsreader', Georgia, 'Iowan Old Style', serif";
 
 // Hard offset shadow — the pulp-poster signature. Use for text-shadow and
 // (via the same string) box-shadow.
@@ -71,6 +80,10 @@ const slideBase = {
   width: "100%",
   height: "100%",
   position: "relative",
+  // Own stacking context: keeps the Frame's grain overlay (zIndex -1) above
+  // the slide background but under every bit of content, and keeps its
+  // screen blend from reaching past the slide.
+  isolation: "isolate",
   overflow: "hidden",
   fontFamily: bodyFont,
   color: PALETTE.paper,
@@ -91,14 +104,26 @@ const slideSurface = (variant = "navy") => ({
 // REUSABLE BITS
 // ============================================================
 function Frame({ variant = "navy" }) {
-  // Inset border frame drawn on every slide. Red slides get a stronger
-  // alpha so the frame stays visible against the saturated background.
+  // Two layers, drawn on every slide:
+  //   1. the photocopy film grain — zIndex -1 puts it above the slide
+  //      background and below all content (slideBase isolates, so it cannot
+  //      escape the slide); pointerEvents none so it never eats a click.
+  //   2. the inset border frame. Red slides get a stronger alpha so the
+  //      frame stays visible against the saturated background.
   return (
-    <div style={{
-      position: "absolute", inset: 34,
-      border: `2px solid ${PALETTE.paper}${variant === "red" ? "52" : "29"}`,
-      pointerEvents: "none",
-    }} />
+    <>
+      <div style={{
+        position: "absolute", inset: 0, zIndex: -1, pointerEvents: "none",
+        backgroundImage: `url(${import.meta.env.BASE_URL}grain.svg)`,
+        opacity: 0.045,
+        mixBlendMode: "screen",
+      }} />
+      <div style={{
+        position: "absolute", inset: 34,
+        border: `2px solid ${PALETTE.paper}${variant === "red" ? "52" : "29"}`,
+        pointerEvents: "none",
+      }} />
+    </>
   );
 }
 
@@ -124,41 +149,61 @@ function FooterBar({ left, right, variant = "navy", accentHex }) {
   );
 }
 
-function Eyebrow({ children, accentHex }) {
+// Rubber stamp — the site's .ns-stamp recipe, scaled up from a ~16px web UI
+// to a 1920x1080 projected slide. The accent dash is kept as the left anchor
+// (it holds the eyebrow to the text margin); the stamp itself carries the
+// only rotation on the slide besides the Logo.
+function Eyebrow({ children, accentHex = PALETTE.rust }) {
+  const stampHex = accentHex || PALETTE.rust;
   return (
-    <div style={{
-      display: "inline-flex", alignItems: "center", gap: 16,
-      fontFamily: displayFont, fontWeight: 600, fontSize: TYPE_SCALE.meta,
-      letterSpacing: "0.24em", textTransform: "uppercase", color: accentHex,
-    }}>
-      <span style={{ display: "inline-block", width: 52, height: 4, background: accentHex }} />
-      {children}
+    <div style={{ display: "inline-flex", alignItems: "center", gap: 20 }}>
+      <span style={{ display: "inline-block", width: 52, height: 5, background: stampHex }} />
+      <span style={{
+        display: "inline-block",
+        fontFamily: displayFont, fontWeight: 700, fontSize: TYPE_SCALE.meta,
+        letterSpacing: "0.06em", textTransform: "uppercase", lineHeight: 1.1,
+        color: stampHex, background: PALETTE.ink,
+        padding: "11px 24px",
+        border: `4px solid ${stampHex}`,
+        boxShadow: `inset 0 0 0 2px ${stampHex}59`,
+        transform: "rotate(-1.25deg)",
+      }}>
+        {children}
+      </span>
     </div>
   );
 }
 
-// Red rule bar under section titles. RuleGrid adds a thin echo line below.
+// Halftone rule under section titles — a red dot strip, not a solid rule
+// (`${PALETTE.rust}80` is the site's rgba(215,50,31,0.5), written as alpha-hex
+// so it tracks the palette). Tall enough that the dots read across a room.
+// RuleGrid adds a thin solid echo line below.
 function RuleBar({ echo = false }) {
   return (
-    <div style={{ position: "relative", width: 200, height: 6, background: PALETTE.rust, marginTop: 20 }}>
+    <div style={{
+      position: "relative", width: 200, height: 18, marginTop: 20,
+      backgroundImage: `radial-gradient(${PALETTE.rust}80 1px, transparent 1.4px)`,
+      backgroundSize: "6px 6px",
+    }}>
       {echo && (
-        <span style={{ position: "absolute", left: 0, right: 0, top: 11, height: 2, background: PALETTE.rust }} />
+        <span style={{ position: "absolute", left: 0, right: 0, top: 24, height: 3, background: PALETTE.rust }} />
       )}
     </div>
   );
 }
 
 function AccentBar({ accentHex = PALETTE.rust, lineColor = `${PALETTE.paper}66`, lineWidth = 180 }) {
-  // Diamond divider — two flat lines flanking a rotated square with the
-  // pulp outline. Theme-neutral by default; themes that want a hilt, sword
-  // silhouette, wand, or other ornament should swap this component or
-  // extend it via props.
+  // Club emblem divider — two flat lines flanking a stamped square. Same
+  // geometry as the old diamond, but axis-aligned (only the Logo and Eyebrow
+  // stamps rotate) and drawn as an outlined stamp in the accent (red on ink
+  // slides, ink on the red ones) rather than a filled gold-family lozenge.
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
       <span style={{ width: lineWidth, height: 3, background: lineColor }} />
       <span style={{
-        width: 18, height: 18, background: accentHex,
-        transform: "rotate(45deg)", border: `2px solid ${PALETTE.inkDeep}`,
+        width: 22, height: 22, background: "transparent",
+        border: `3px solid ${accentHex}`,
+        boxShadow: `inset 0 0 0 2px ${accentHex}59`,
         flex: "0 0 auto",
       }} />
       <span style={{ width: lineWidth, height: 3, background: lineColor }} />
@@ -166,21 +211,37 @@ function AccentBar({ accentHex = PALETTE.rust, lineColor = `${PALETTE.paper}66`,
   );
 }
 
-// Venue logo mark. Ships with the FGBC red logo in public/; themed forks
-// replace the PNG (or delete it — onError hides the img cleanly, so the
-// slide simply renders without a mark).
-const LOGO_SRC = `${import.meta.env.BASE_URL}logo-fgbc-red.png`;
-
+// Club mark — a text lockup, not an image. Night Shift retired the projector
+// PNG from club chrome, so there is nothing to load and nothing to 404: the
+// name in Oswald over a rotated "EST. JXN MS" stamp. `size` is the total mark
+// height (150 on Title, 110 on End); everything scales off it.
 function Logo({ size = 150, style }) {
-  const [failed, setFailed] = useState(false);
-  if (failed) return null;
+  const nameSize = Math.round(size * 0.42);
+  const stampSize = Math.round(size * 0.15);
   return (
-    <img
-      src={LOGO_SRC}
-      alt="Fertile Ground Beer Co"
-      onError={() => setFailed(true)}
-      style={{ height: size, width: "auto", ...style }}
-    />
+    <div style={{
+      height: size, display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center",
+      gap: Math.round(size * 0.12),
+      ...style,
+    }}>
+      <div style={{
+        fontFamily: displayFont, fontWeight: 700, fontSize: nameSize, lineHeight: 1,
+        letterSpacing: "0.04em", textTransform: "uppercase", color: PALETTE.paper,
+      }}>
+        JXN Film Club
+      </div>
+      <div style={{
+        fontFamily: displayFont, fontWeight: 700, fontSize: stampSize, lineHeight: 1,
+        letterSpacing: "0.18em", textTransform: "uppercase", color: PALETTE.rust,
+        padding: `${Math.round(size * 0.045)}px ${Math.round(size * 0.09)}px`,
+        border: `2px solid ${PALETTE.rust}`,
+        boxShadow: `inset 0 0 0 1px ${PALETTE.rust}59`,
+        transform: "rotate(-4deg)",
+      }}>
+        Est. JXN MS
+      </div>
+    </div>
   );
 }
 
@@ -286,7 +347,8 @@ function TitleSlide({ accent, title }) {
 
           {t.edition && (
             <div style={{
-              fontFamily: heroFont, fontSize: TYPE_SCALE.display, lineHeight: 0.94,
+              fontFamily: heroFont, fontWeight: 900, fontStyle: "italic",
+              fontSize: TYPE_SCALE.display, lineHeight: 0.94,
               letterSpacing: "-0.01em", textTransform: "uppercase", color: PALETTE.paper,
               margin: "34px 0 10px",
             }}>
@@ -321,7 +383,7 @@ function TitleSlide({ accent, title }) {
         </div>
 
         <FooterBar
-          left="Fertile Ground"
+          left="Jackson, MS"
           right={t.footerDate || ""}
           accentHex={accent.hex}
         />
@@ -335,10 +397,10 @@ function TitleSlide({ accent, title }) {
 // ============================================================
 function RulesSlide({ accent }) {
   const rules = [
-    { n: "I",   t: "No phones",                 d: "Looking up answers will result in points being deducted at the hosts' discretion." },
-    { n: "II",  t: "Spelling is best attempt",  d: "Misspellings are fine as long as the answer is unambiguous and correct." },
-    { n: "III", t: "Hosts are final",           d: "The hosts have the last word on every ruling. No appeals." },
-    { n: "IV",  t: "Have fun",                  d: "Lean in, get into it, and don't take any single question too seriously." },
+    { n: "I",   t: "Phones away",           d: "Screens face down for the whole night. If you need yours, step out and sit the round out." },
+    { n: "II",  t: "One sheet per team",     d: "Every team writes on a single answer sheet — one team name on top, one set of answers turned in." },
+    { n: "III", t: "No looking it up",       d: "Trust your memory and your teammates. Answers found on a screen cost your team the points." },
+    { n: "IV",  t: "Hosts' call is final",   d: "The hosts settle every ruling on the night. No appeals, no rolling the tape back." },
   ];
   return (
     <RuleGrid
@@ -371,7 +433,7 @@ function PrizeSlide() {
             fontFamily: displayFont, fontWeight: 600, fontSize: TYPE_SCALE.meta,
             letterSpacing: "0.26em", textTransform: "uppercase", color: PALETTE.paper,
           }}>
-            Tonight's Bounty
+            Tonight's Prize
           </div>
 
           <div style={{
@@ -401,17 +463,18 @@ function PrizeSlide() {
             </div>
 
             <div style={{
-              fontFamily: heroFont, fontSize: 220, lineHeight: 1,
+              fontFamily: heroFont, fontWeight: 900, fontStyle: "italic",
+              fontSize: 220, lineHeight: 1,
               color: PALETTE.ink,
             }}>
-              $100
+              CURATOR
             </div>
             <div style={{
               fontFamily: displayFont, fontWeight: 700, fontSize: 44,
               letterSpacing: "0.1em", textTransform: "uppercase",
               color: PALETTE.rust, marginTop: 12,
             }}>
-              FERTILE GROUND GIFT CARD
+              FOR A NIGHT
             </div>
           </div>
 
@@ -419,7 +482,7 @@ function PrizeSlide() {
             marginTop: 46, fontFamily: bodyFont, fontStyle: "italic",
             fontSize: 34, color: `${PALETTE.paper}D9`, maxWidth: 900,
           }}>
-            More than enough to cover your tab tonight.
+            The winning team picks the next screening.
           </div>
         </div>
 
@@ -437,7 +500,7 @@ function CostumeContestSlide({ accent }) {
     { n: "I",   t: "Open to All Guests",    d: "Any guest can enter — you don't need to be on a trivia team to win." },
     { n: "II",  t: "On-Theme Costumes",     d: "Costumes must fit tonight's theme. Original concepts welcome if the connection is clear." },
     { n: "III", t: "Hosts Decide",          d: "The hosts will pick Best Overall. No appeals." },
-    { n: "IV",  t: "Individual Prize",      d: "One winner takes home a package beer as a side prize." },
+    { n: "IV",  t: "Individual Prize",      d: "One winner takes home a small prize of their own." },
   ];
   return (
     <RuleGrid
@@ -528,8 +591,8 @@ function RoundOpener({ number, title, subtitle, kicker, label }) {
 function PictureRoundInstructions({ accent }) {
   const steps = [
     { n: "01", t: "Form your team",   d: "Gather your group and pick a team name. Pun-heavy or theme-on-theme is encouraged." },
-    { n: "02", t: "Collect your sheet", d: "One Round 1 picture sheet per team. Grab one from Jack or Michael at the host stand." },
-    { n: "03", t: "Identify the images", d: "Write your answer in the space provided next to each numbered image." },
+    { n: "02", t: "Collect your sheet", d: "One Round 1 picture sheet per team. Grab one from a host." },
+    { n: "03", t: "Identify the films", d: "Identify the film, the director, or the year. Write your answer next to each numbered still." },
     { n: "04", t: "Return your answers", d: "Hand the sheet back to the hosts before Round 2 begins." },
   ];
   return (
@@ -836,7 +899,7 @@ function QuestionSlide({
 // sizing, but text wrapping makes shrink non-linear, so it iterates. Scale rides
 // a CSS var so the measure loop can force synchronous reflow and converge in one
 // pass. Re-fits on content change, container resize, and web-font load (metrics
-// change once Oswald / Work Sans arrive).
+// change once Oswald / Newsreader arrive).
 function useShrinkToFit(deps) {
   const ref = useRef(null);
   useLayoutEffect(() => {
@@ -949,7 +1012,7 @@ function RoundRecap({ round, roundTitle, questions, accent, startIndex = 0, part
 // ============================================================
 // SLIDE: INTERMISSION
 // ============================================================
-const INTERMISSION_WORDS = ["Submit.", "Stretch.", "Refill.", "Regroup."];
+const INTERMISSION_WORDS = ["Submit.", "Stretch.", "Argue.", "Regroup."];
 
 function IntermissionSlide({ nextRound, nextTitle, nextLabel, label }) {
   const upNextText = nextLabel || `Round ${String(nextRound).padStart(2, "0")} · ${nextTitle}`;
@@ -987,7 +1050,8 @@ function IntermissionSlide({ nextRound, nextTitle, nextLabel, label }) {
             const active = i === activeWord;
             return (
               <div key={word} style={{
-                fontFamily: heroFont, fontSize: TYPE_SCALE.display, lineHeight: 1.02,
+                fontFamily: heroFont, fontWeight: 900, fontStyle: "italic",
+                fontSize: TYPE_SCALE.display, lineHeight: 1.02,
                 color: active ? PALETTE.paper : `${PALETTE.paper}66`,
                 textShadow: active ? hardShadow(9) : "none",
                 transition: "color 450ms ease, text-shadow 450ms ease",
@@ -1119,7 +1183,7 @@ function PictureRoundRecap({ items, accent, pictureRound }) {
               fontFamily: bodyFont, fontStyle: "italic",
               fontSize: 32, color: `${PALETTE.paper}B3`,
             }}>
-              {pictureRound?.instruction ?? "Identify the character, place, ship or creature."}
+              {pictureRound?.instruction ?? "Identify the film, the director, or the year."}
             </div>
           </div>
           <RuleBar />
@@ -1192,7 +1256,8 @@ function EndSlide({ accent, end }) {
           </div>
           {e.hero1 && (
             <div style={{
-              fontFamily: heroFont, fontSize: 172, lineHeight: 0.92,
+              fontFamily: heroFont, fontWeight: 900, fontStyle: "italic",
+              fontSize: 172, lineHeight: 0.92,
               textTransform: "uppercase", color: PALETTE.paper, marginTop: 28,
             }}>
               {e.hero1}
@@ -1200,7 +1265,8 @@ function EndSlide({ accent, end }) {
           )}
           {e.hero2 && (
             <div style={{
-              fontFamily: heroFont, fontSize: 172, lineHeight: 0.92,
+              fontFamily: heroFont, fontWeight: 900, fontStyle: "italic",
+              fontSize: 172, lineHeight: 0.92,
               textTransform: "uppercase", color: PALETTE.gold,
             }}>
               {e.hero2}
@@ -1248,7 +1314,8 @@ function NextEventSlide({ accent, nextEvent }) {
           )}
           {e.hero && (
             <div style={{
-              fontFamily: heroFont, fontSize: 120, lineHeight: 0.96,
+              fontFamily: heroFont, fontWeight: 900, fontStyle: "italic",
+              fontSize: 120, lineHeight: 0.96,
               textTransform: "uppercase", color: PALETTE.paper, marginTop: 28,
             }}>
               {e.hero}

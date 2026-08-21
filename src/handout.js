@@ -9,7 +9,7 @@ import { DEFAULT_ASPECT, pictureGridLayout } from './pictures.js';
 // Fallback instruction line printed under the handout title. Callers (the
 // control window) pass the per-game value from meta.pictureRound; this keeps
 // the bare renderHandoutCanvas(items) call working on its own.
-const DEFAULT_HANDOUT_INSTRUCTION = 'Identify the character, place, ship or creature.';
+const DEFAULT_HANDOUT_INSTRUCTION = 'Identify the film, the director, or the year.';
 
 // Default cell render options — mirrors meta.pictureRound so the bare
 // renderHandoutCanvas(items) call reproduces the historical layout.
@@ -67,21 +67,21 @@ export async function renderHandoutCanvas(items, instruction = DEFAULT_HANDOUT_I
   ctx.fillRect(0, 0, W, H);
 
   // Title — "PICTURE ROUND" in deck typography
-  ctx.fillStyle = '#0B0E1A';
+  ctx.fillStyle = '#100f0e';
   ctx.font = `700 88px 'Oswald', 'Bebas Neue', Impact, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillText('PICTURE ROUND', W / 2, TITLE_Y);
 
-  // Thin accent rule under the title
+  // Thin accent rule under the title — brand red
   const ruleW = 220;
-  ctx.fillStyle = '#0B0E1A';
+  ctx.fillStyle = '#d7321f';
   ctx.fillRect((W - ruleW) / 2, RULE_Y, ruleW, 3);
 
   // Instruction line — what contestants are doing. Left-aligned to match the
-  // slide layout (italic Work Sans body text under the accent rule).
-  ctx.fillStyle = '#54514A';
-  ctx.font = `italic 500 36px 'Work Sans', system-ui, sans-serif`;
+  // slide layout (italic Newsreader body text under the accent rule).
+  ctx.fillStyle = '#6e6a60';
+  ctx.font = `italic 500 36px 'Newsreader', Georgia, 'Iowan Old Style', serif`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.fillText(instruction, MARGIN_X, INSTRUCTION_Y);
@@ -114,12 +114,12 @@ export async function renderHandoutCanvas(items, instruction = DEFAULT_HANDOUT_I
 
     // Photo box background (faint) for empty cells; transparent if image present
     if (!images[i]) {
-      ctx.fillStyle = '#F5F2EA';
+      ctx.fillStyle = '#f2efe8';
       ctx.fillRect(x, y, cellW, photoH);
     }
 
     // Photo box border
-    ctx.strokeStyle = '#0B0E1A';
+    ctx.strokeStyle = '#100f0e';
     ctx.lineWidth = 2;
     ctx.strokeRect(x + 1, y + 1, cellW - 2, photoH - 2);
 
@@ -154,7 +154,7 @@ export async function renderHandoutCanvas(items, instruction = DEFAULT_HANDOUT_I
       ctx.restore();
     } else {
       // "PHOTO" label centered when empty
-      ctx.fillStyle = '#A8A39A';
+      ctx.fillStyle = '#a89f8f';
       ctx.font = `500 28px 'Oswald', sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -165,7 +165,7 @@ export async function renderHandoutCanvas(items, instruction = DEFAULT_HANDOUT_I
     const badgeSize = 56;
     const bx = x + 12;
     const by = y + 12;
-    ctx.fillStyle = '#0B0E1A';
+    ctx.fillStyle = '#100f0e';
     ctx.fillRect(bx, by, badgeSize, badgeSize);
     ctx.fillStyle = '#FFFFFF';
     ctx.font = `700 30px 'Oswald', 'Bebas Neue', Impact, sans-serif`;
@@ -175,7 +175,7 @@ export async function renderHandoutCanvas(items, instruction = DEFAULT_HANDOUT_I
 
     // Answer line — sits at the bottom of the answer area; writing goes above it.
     const lineY = y + photoH + PHOTO_GAP + ANSWER_HEIGHT - ANSWER_LINE_THICKNESS;
-    ctx.fillStyle = '#0B0E1A';
+    ctx.fillStyle = '#100f0e';
     ctx.fillRect(x, lineY, cellW, ANSWER_LINE_THICKNESS);
   }
 
@@ -218,7 +218,7 @@ export async function renderAnswersHandoutCanvas(lineCount = 10) {
   ctx.fillRect(0, 0, W, H);
 
   // Title — match the picture handout's typography.
-  ctx.fillStyle = '#0B0E1A';
+  ctx.fillStyle = '#100f0e';
   ctx.font = `700 88px 'Oswald', 'Bebas Neue', Impact, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
@@ -226,6 +226,7 @@ export async function renderAnswersHandoutCanvas(lineCount = 10) {
 
   // Thin accent rule under the title (mirrors the picture handout).
   const ruleW = 220;
+  ctx.fillStyle = '#d7321f';
   ctx.fillRect((W - ruleW) / 2, RULE_Y, ruleW, 3);
 
   // TEAM (left) + ROUND (right) on the same row as the instruction line.
@@ -248,7 +249,7 @@ export async function renderAnswersHandoutCanvas(lineCount = 10) {
   for (let i = 0; i < lineCount; i++) {
     const lineY = LINES_TOP + i * LINE_GAP;
     const numLabel = `${String(i + 1).padStart(2, '0')}.`;
-    ctx.fillStyle = '#0B0E1A';
+    ctx.fillStyle = '#100f0e';
     ctx.fillText(numLabel, MARGIN_X, lineY);
     const numW = ctx.measureText(numLabel).width;
     const writeStart = MARGIN_X + numW + 24;
@@ -275,7 +276,7 @@ function drawTeamField(ctx, x, y, totalWidth) {
 }
 
 function drawLabeledLine(ctx, label, x, y, lineWidth) {
-  ctx.fillStyle = '#0B0E1A';
+  ctx.fillStyle = '#100f0e';
   ctx.font = `700 32px 'Oswald', 'Bebas Neue', Impact, sans-serif`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';

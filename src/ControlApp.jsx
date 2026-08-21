@@ -34,7 +34,7 @@ const COLORS = {
 
 const baseStyle = {
   margin: 0, minHeight: '100vh', background: COLORS.bg, color: COLORS.text,
-  fontFamily: "'Work Sans', system-ui, sans-serif", fontSize: 14, lineHeight: 1.4,
+  fontFamily: "'Newsreader', Georgia, serif", fontSize: 14, lineHeight: 1.4,
 };
 
 // Track viewport width so layouts can stack at narrow widths (split-tab use,
@@ -354,7 +354,7 @@ function TimerCard({ timer }) {
     <Card title="Timer">
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 16 }}>
         <div style={{
-          fontFamily: 'Oswald, system-ui, sans-serif', fontSize: 64, fontWeight: 700,
+          fontFamily: "'Oswald', 'Helvetica Neue', Arial, sans-serif", fontSize: 64, fontWeight: 700,
           color: timer.enabled ? (timer.seconds <= 10 ? COLORS.danger : COLORS.accent) : COLORS.textDim,
           lineHeight: 1,
         }}>
@@ -1217,7 +1217,7 @@ function PictureCell({
         width: 28, height: 28, display: 'flex', alignItems: 'center',
         justifyContent: 'center', fontSize: 12, fontWeight: 700,
         background: COLORS.accent, color: COLORS.bg, borderRadius: 4,
-        fontFamily: 'Oswald, sans-serif', pointerEvents: 'none',
+        fontFamily: "'Oswald', 'Helvetica Neue', Arial, sans-serif", pointerEvents: 'none',
       }}>
         {String(i + 1).padStart(2, '0')}
       </div>
@@ -1473,7 +1473,7 @@ function buildSlideOutline(rounds, tiebreakers = [], meta = DEFAULT_META) {
     { key: 'rules', label: 'House Rules' },
   ];
   if (meta.show?.prize ?? true) {
-    list.push({ key: 'prize', label: 'Grand Prize — $100 Gift Card' });
+    list.push({ key: 'prize', label: 'Grand Prize — Curator for a Night' });
   }
   if (meta.show?.costumeContest ?? true) {
     list.push({ key: 'costume', label: 'Costume Contest' });

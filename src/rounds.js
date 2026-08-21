@@ -3,80 +3,80 @@
 
 import { parseCsv } from './csv.js';
 
-const STORAGE_KEY = 'pub-trivia-scaffold.rounds';
-const TIEBREAKER_STORAGE_KEY = 'pub-trivia-scaffold.tiebreakers';
+const STORAGE_KEY = 'jxnfilmclub-trivia.rounds';
+const TIEBREAKER_STORAGE_KEY = 'jxnfilmclub-trivia.tiebreakers';
 
 export const TIEBREAKER_COUNT = 3;
 
-// Real general-knowledge content — this deck is hostable as-is. Themed forks
-// (via /new-pub-trivia-deck) replace these arrays wholesale.
+// Real film-trivia content — written for a room of JXN Film Club members and
+// hostable as-is. Rounds are numbered 2..5 because slot 1 is the Picture Round.
 export const DEFAULT_ROUNDS = [
   {
-    n: 2, title: "Warm-Up Round",
-    subtitle: "A gentle start. Easy points to set the tone.",
+    n: 2, title: "Opening Frames",
+    subtitle: "First shots, first lines, first frames. Points for knowing how a film introduces itself.",
     kicker: "10 Questions",
     questions: [
-      { prompt: "What is the capital city of Australia?", answer: "Canberra" },
-      { prompt: "How many sides does a hexagon have?", answer: "Six" },
-      { prompt: "Which planet in our solar system is known as the Red Planet?", answer: "Mars" },
-      { prompt: "What is the largest ocean on Earth?", answer: "The Pacific Ocean" },
-      { prompt: "In which country would you find the Eiffel Tower?", answer: "France" },
-      { prompt: "How many strings does a standard violin have?", answer: "Four" },
-      { prompt: "What is the chemical symbol for gold?", answer: "Au" },
-      { prompt: "What color do you get when you mix blue and yellow paint?", answer: "Green" },
-      { prompt: "Which animal is known as the King of the Jungle?", answer: "The lion" },
-      { prompt: "How many minutes are there in a full day?", answer: "1,440" },
+      { prompt: "Which 1977 film opens with the on-screen words “A long time ago in a galaxy far, far away”?", answer: "Star Wars" },
+      { prompt: "Which 1975 Steven Spielberg film opens with a nighttime beach party and a young woman going for a swim alone?", answer: "Jaws" },
+      { prompt: "Which 1994 Quentin Tarantino film opens with two robbers nicknamed Pumpkin and Honey Bunny deciding to hold up the diner they are sitting in?", answer: "Pulp Fiction" },
+      { prompt: "“I believe in America” is the first line spoken in which 1972 film?", answer: "The Godfather" },
+      { prompt: "Which 1950 Billy Wilder film opens on a dead screenwriter floating in a Hollywood swimming pool, narrating his own story?", answer: "Sunset Boulevard" },
+      { prompt: "Which 1968 Stanley Kubrick film opens with a long wordless sequence titled “The Dawn of Man”?", answer: "2001: A Space Odyssey" },
+      { prompt: "Saul Bass designed the sliding, fracturing grey bars of the title sequence for which 1960 Alfred Hitchcock film?", answer: "Psycho" },
+      { prompt: "Which 1968 Sergio Leone western opens with three gunmen waiting out a long, near-silent scene at a desert railway station?", answer: "Once Upon a Time in the West" },
+      { prompt: "Which 1958 Orson Welles film opens with a celebrated unbroken crane shot following a car with a bomb in its trunk toward the Mexican border?", answer: "Touch of Evil" },
+      { prompt: "Which 1929 short film by Luis Buñuel and Salvador Dalí opens with a razor slicing a woman’s eye?", answer: "Un Chien Andalou" },
     ],
   },
   {
-    n: 3, title: "Food & Drink",
-    subtitle: "Eat, drink, and answer accordingly.",
+    n: 3, title: "Behind the Camera",
+    subtitle: "The people whose names run before and after the cast. Directors, shooters, cutters.",
     kicker: "10 Questions",
     questions: [
-      { prompt: "Which country gave the world the rice dish paella?", answer: "Spain" },
-      { prompt: "What spirit is the traditional base of a mojito?", answer: "White rum" },
-      { prompt: "Hummus is primarily made from which legume?", answer: "Chickpeas" },
-      { prompt: "Which cheese is traditionally crumbled over a Greek salad?", answer: "Feta" },
-      { prompt: "The Japanese spirit sake is brewed from which grain?", answer: "Rice" },
-      { prompt: "Which nut is ground with sugar to make marzipan?", answer: "Almonds" },
-      { prompt: "The Scoville scale measures the heat of what?", answer: "Chili peppers" },
-      { prompt: "Which fruit is dried to make prunes?", answer: "Plums" },
-      { prompt: "Miso paste is traditionally made by fermenting which bean?", answer: "Soybeans" },
-      { prompt: "What is the Italian term for the appetizer course, literally meaning “before the meal”?", answer: "Antipasto" },
+      { prompt: "Which director made Jaws, E.T. the Extra-Terrestrial and Schindler’s List?", answer: "Steven Spielberg" },
+      { prompt: "Which Japanese director made Seven Samurai, Rashomon and Ran?", answer: "Akira Kurosawa" },
+      { prompt: "Which director won both Best Director and Best Picture for Parasite?", answer: "Bong Joon-ho" },
+      { prompt: "Editor Thelma Schoonmaker has cut nearly every feature by which director since Raging Bull?", answer: "Martin Scorsese" },
+      { prompt: "Which cinematographer shot Blade Runner 2049, Sicario and No Country for Old Men?", answer: "Roger Deakins" },
+      { prompt: "Which director made Cléo from 5 to 7 and The Gleaners and I, and is often called the grandmother of the French New Wave?", answer: "Agnès Varda" },
+      { prompt: "Which Taiwanese-born director won the Best Director Oscar for both Brokeback Mountain and Life of Pi?", answer: "Ang Lee" },
+      { prompt: "Alfred Hitchcock was nominated five times for Best Director. How many of those did he win?", answer: "None — he never won a competitive directing Oscar" },
+      { prompt: "Which cinematographer shot Citizen Kane, and is credited with its deep-focus photography?", answer: "Gregg Toland" },
+      { prompt: "The 2022 Sight and Sound critics’ poll named which film the greatest of all time, putting a woman director at number one for the first time?", answer: "Jeanne Dielman, 23 quai du Commerce, 1080 Bruxelles" },
     ],
   },
   {
-    n: 4, title: "Music & Pop Culture",
-    subtitle: "Charts, screens, and stages.",
+    n: 4, title: "Needle Drops",
+    subtitle: "Scores, songs and cues — the half of a film you can hear with your eyes shut.",
     kicker: "10 Questions",
     questions: [
-      { prompt: "Which artist released “Thriller”, the best-selling album of all time?", answer: "Michael Jackson" },
-      { prompt: "Freddie Mercury was the lead singer of which band?", answer: "Queen" },
-      { prompt: "In “The Wizard of Oz”, what is the name of Dorothy’s dog?", answer: "Toto" },
-      { prompt: "Which band recorded the 1977 album “Rumours”?", answer: "Fleetwood Mac" },
-      { prompt: "Jazz legend Miles Davis is famous for playing which instrument?", answer: "The trumpet" },
-      { prompt: "Daniel Craig first played James Bond in which 2006 film?", answer: "Casino Royale" },
-      { prompt: "What is Lady Gaga’s real first name?", answer: "Stefani" },
-      { prompt: "Which composer wrote the set of violin concertos known as “The Four Seasons”?", answer: "Antonio Vivaldi" },
-      { prompt: "Which pop star’s fans are known as “Swifties”?", answer: "Taylor Swift" },
-      { prompt: "Which 1994 film features the line “Life is like a box of chocolates”?", answer: "Forrest Gump" },
+      { prompt: "Which composer wrote the two-note theme for Jaws as well as the scores for Star Wars, Jurassic Park and Schindler’s List?", answer: "John Williams" },
+      { prompt: "Céline Dion’s “My Heart Will Go On” is the theme song from which 1997 film?", answer: "Titanic" },
+      { prompt: "The Bee Gees’ “Stayin’ Alive” soundtracks the opening strut of which 1977 John Travolta film?", answer: "Saturday Night Fever" },
+      { prompt: "Simon and Garfunkel’s “Mrs. Robinson” features in which 1967 Mike Nichols film?", answer: "The Graduate" },
+      { prompt: "Which Italian composer scored The Good, the Bad and the Ugly, Once Upon a Time in America and The Hateful Eight?", answer: "Ennio Morricone" },
+      { prompt: "Wagner’s “Ride of the Valkyries” blares from helicopter loudspeakers during the beach assault in which 1979 Francis Ford Coppola film?", answer: "Apocalypse Now" },
+      { prompt: "Which Stealers Wheel song plays on the radio during the ear-cutting scene in Reservoir Dogs?", answer: "“Stuck in the Middle with You”" },
+      { prompt: "Which composer scored Spirited Away, My Neighbor Totoro and Princess Mononoke for Studio Ghibli?", answer: "Joe Hisaishi" },
+      { prompt: "Which composer wrote the shrieking strings of the Psycho shower scene, and later scored Taxi Driver?", answer: "Bernard Herrmann" },
+      { prompt: "Which musician wrote the spare slide-guitar score for Wim Wenders’ 1984 film Paris, Texas?", answer: "Ry Cooder" },
     ],
   },
   {
-    n: 5, title: "Final Round",
-    subtitle: "The hardest questions. For the bragging rights.",
+    n: 5, title: "Final Reel",
+    subtitle: "Endings, last lines and closing shots. The hardest round — spoilers throughout.",
     kicker: "10 Questions · Tiebreaker Material",
     questions: [
-      { prompt: "What is the only metal that is liquid at room temperature?", answer: "Mercury" },
-      { prompt: "In what year did the Berlin Wall fall?", answer: "1989" },
-      { prompt: "What is the longest river in Asia?", answer: "The Yangtze" },
-      { prompt: "Which element has the atomic number 1?", answer: "Hydrogen" },
-      { prompt: "The Strait of Gibraltar separates Spain from which country?", answer: "Morocco" },
-      { prompt: "What is the smallest country in the world by area?", answer: "Vatican City" },
-      { prompt: "Who wrote the novel “One Hundred Years of Solitude”?", answer: "Gabriel García Márquez" },
-      { prompt: "Which artist painted “The Persistence of Memory” — the one with the melting clocks?", answer: "Salvador Dalí" },
-      { prompt: "What is the name of the deepest known point in Earth’s oceans?", answer: "Challenger Deep, in the Mariana Trench" },
-      { prompt: "Which of the Seven Wonders of the Ancient World still stands today?", answer: "The Great Pyramid of Giza" },
+      { prompt: "“Louis, I think this is the beginning of a beautiful friendship” is the last line of which 1942 film?", answer: "Casablanca" },
+      { prompt: "Which 1968 science-fiction film ends with its hero finding the Statue of Liberty half-buried on a beach?", answer: "Planet of the Apes" },
+      { prompt: "Which 1999 M. Night Shyamalan film ends with the reveal that Malcolm Crowe has been dead the whole time?", answer: "The Sixth Sense" },
+      { prompt: "Which 1974 Roman Polanski film ends with Evelyn Mulwray shot dead at the wheel of her car, a horn blaring, as Noah Cross leads her daughter away?", answer: "Chinatown" },
+      { prompt: "“Nobody’s perfect” is the last line of which 1959 Billy Wilder comedy?", answer: "Some Like It Hot" },
+      { prompt: "Which 1941 film ends with a sled burning in a furnace, revealing what Rosebud was?", answer: "Citizen Kane" },
+      { prompt: "Which 1980 Stanley Kubrick film ends on a slow push into a 1921 ballroom photograph?", answer: "The Shining" },
+      { prompt: "Which 1959 François Truffaut film ends on a freeze-frame of a boy’s face after he runs to the sea?", answer: "The 400 Blows — also accept Les Quatre Cents Coups" },
+      { prompt: "Which 1948 Vittorio De Sica film ends with a humiliated father and his son walking away hand in hand into the crowd?", answer: "Bicycle Thieves — also accept The Bicycle Thief (Ladri di biciclette)" },
+      { prompt: "Which 1962 Chris Marker short, told almost entirely in still photographs and later remade by Terry Gilliam as 12 Monkeys, ends with its traveller witnessing his own death?", answer: "La Jetée" },
     ],
   },
 ];
@@ -119,12 +119,12 @@ export function resetRounds() {
 // ---- Tiebreakers ---------------------------------------------------------
 // Sudden-death questions used after the final round when teams are tied.
 // Numeric closest-wins prompts; editable via the control window's editor.
-// Answers (for the host): 88 keys · 206 bones · 118 elements.
+// Answers (for the host): 11 Oscars · 35 years · 175 minutes.
 
 export const DEFAULT_TIEBREAKERS = [
-  "How many keys are on a standard full-size piano?",
-  "How many bones are in the adult human body?",
-  "How many elements are on the periodic table?",
+  "How many Academy Awards did Ben-Hur win?",
+  "How many years separate the release of Blade Runner and its sequel Blade Runner 2049?",
+  "How long is the theatrical cut of The Godfather, in minutes?",
 ];
 
 export function loadTiebreakers() {
@@ -203,7 +203,7 @@ export function isAutoKicker(kicker) {
 // (the 10-slot picture-round buffer, data URLs included) and `meta` (full
 // game meta). Version 1 files (questions + tiebreakers only) still import.
 
-export const QUESTIONS_EXPORT_TYPE = 'pub-trivia-scaffold/questions';
+export const QUESTIONS_EXPORT_TYPE = 'jxnfilmclub-trivia/questions';
 export const QUESTIONS_EXPORT_VERSION = 2;
 
 // `extras` carries the optional bundle sections: pass { pictures, meta } to
@@ -232,7 +232,7 @@ export function parseQuestionsImport(text) {
     throw new Error('Expected a JSON object at the top level.');
   }
   if (data.type !== QUESTIONS_EXPORT_TYPE) {
-    throw new Error('Not a Pub Trivia Scaffold questions export (wrong "type").');
+    throw new Error('Not a JXN Film Club Trivia questions export (wrong "type").');
   }
   if (!Array.isArray(data.rounds) || data.rounds.length === 0) {
     throw new Error('"rounds" must be a non-empty array.');
@@ -313,7 +313,7 @@ export function buildCsvTemplate() {
   // a writer template and won't re-import. Keeping every comment comma-free
   // means the file imports correctly whatever separator setting is chosen.
   const comments = [
-    '# PUB TRIVIA — QUESTION TEMPLATE',
+    '# JXN FILM CLUB TRIVIA — QUESTION TEMPLATE',
     '',
     '# Type your questions in the rows below the header.',
     '# Rows starting with # are ignored on import — leave them or delete them.',
