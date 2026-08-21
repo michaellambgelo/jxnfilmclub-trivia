@@ -3,7 +3,7 @@
 // Workflow: user pastes images in the control window → ingestImage downscales
 // and re-encodes them (so ten photos fit localStorage's ~5MB quota with room
 // to spare) → data URLs persist in localStorage. The deck bundle export
-// ("Export Deck" in the Edit Questions tab) carries the pictures along with
+// ("Export Show Bundle" in the Questions tab) carries the pictures along with
 // the questions, so a deck moves between machines as a single JSON file.
 
 const COUNT = 10;

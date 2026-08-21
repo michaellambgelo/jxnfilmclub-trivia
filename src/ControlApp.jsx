@@ -108,6 +108,18 @@ export default function ControlApp() {
   const [currentSlide, setCurrentSlide] = useState({ index: 0, total: 0, label: '' });
   const [timer, setTimer] = useState({ seconds: 0, paused: false, enabled: false });
 
+  // Draft state lives here rather than in the panels so unsaved edits survive
+  // tab switches, the header can badge dirty tabs, and a bundle import in the
+  // Questions tab can stage its meta for the Show Setup tab. Two independent
+  // surfaces: Questions (rounds + tiebreakers) and Show Setup (meta) — each
+  // with its own dirty flag and Save/Revert/Reset. Pictures stay live-commit.
+  const [draftRounds, setDraftRounds] = useState(rounds);
+  const [draftTiebreakers, setDraftTiebreakers] = useState(tiebreakers);
+  const [draftMeta, setDraftMeta] = useState(meta);
+  const [questionsDirty, setQuestionsDirty] = useState(false);
+  const [metaDirty, setMetaDirty] = useState(false);
+  const [importNote, setImportNote] = useState('');
+
   // Push edits to the display window.
   const commitRounds = useCallback((next) => {
     setRounds(next);
@@ -147,6 +159,84 @@ export default function ControlApp() {
     broadcast('sync:request', null);
   }, []);
 
+  // If the persisted data changes externally (e.g. another window saved), pull
+  // it in — but only when that surface isn't mid-edit, to avoid clobbering.
+  useEffect(() => {
+    if (!questionsDirty) setDraftRounds(rounds);
+  }, [rounds, questionsDirty]);
+  useEffect(() => {
+    if (!questionsDirty) setDraftTiebreakers(tiebreakers);
+  }, [tiebreakers, questionsDirty]);
+  useEffect(() => {
+    if (!metaDirty) setDraftMeta(meta);
+  }, [meta, metaDirty]);
+
+  const saveQuestions = () => {
+    commitRounds(draftRounds);
+    commitTiebreakers(draftTiebreakers);
+    setQuestionsDirty(false);
+    setImportNote('');
+  };
+  const revertQuestions = () => {
+    setDraftRounds(rounds);
+    setDraftTiebreakers(tiebreakers);
+    setQuestionsDirty(false);
+    setImportNote('');
+  };
+  const resetQuestions = () => {
+    if (!confirm('Reset all questions and tiebreakers to the default General Trivia content? This will discard your edits. Slide settings and copy (Show Setup tab) are untouched.')) return;
+    resetRounds();
+    resetTiebreakers();
+    const freshRounds = loadRounds();
+    const freshTiebreakers = loadTiebreakers();
+    setDraftRounds(freshRounds);
+    setDraftTiebreakers(freshTiebreakers);
+    setQuestionsDirty(false);
+    setImportNote('');
+    commitRounds(freshRounds);
+    commitTiebreakers(freshTiebreakers);
+  };
+
+  const saveSetup = () => {
+    commitMeta(draftMeta);
+    setMetaDirty(false);
+  };
+  const revertSetup = () => {
+    setDraftMeta(meta);
+    setMetaDirty(false);
+  };
+  const resetSetup = () => {
+    if (!confirm('Reset all slide copy, toggles, and display settings to defaults? This will discard your edits. Questions and tiebreakers are untouched.')) return;
+    resetMeta();
+    const freshMeta = loadMeta();
+    setDraftMeta(freshMeta);
+    setMetaDirty(false);
+    commitMeta(freshMeta);
+  };
+
+  // Cmd/Ctrl+S → Save & Push for whichever editing surface is active. On the
+  // editing tabs the browser save dialog is always suppressed (muscle-memory
+  // saves with nothing dirty shouldn't pop it); other tabs leave the key alone.
+  const trySaveRef = useRef(() => {});
+  trySaveRef.current = (e) => {
+    if (tab === 'questions') {
+      e.preventDefault();
+      if (questionsDirty) saveQuestions();
+    } else if (tab === 'setup') {
+      e.preventDefault();
+      if (metaDirty) saveSetup();
+    }
+  };
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
+      if (e.key !== 's' && e.key !== 'S') return;
+      trySaveRef.current(e);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // The Picture Round interface only applies when that round is in the deck.
   // If it's switched off while the Picture Round tab is open, fall back.
   const pictureRoundEnabled = meta.show.pictureRound;
@@ -156,7 +246,14 @@ export default function ControlApp() {
 
   return (
     <div style={baseStyle}>
-      <Header tab={tab} setTab={setTab} currentSlide={currentSlide} pictureRoundEnabled={pictureRoundEnabled} />
+      <Header
+        tab={tab}
+        setTab={setTab}
+        currentSlide={currentSlide}
+        pictureRoundEnabled={pictureRoundEnabled}
+        questionsDirty={questionsDirty}
+        metaDirty={metaDirty}
+      />
       {tab === 'present' && (
         <PresenterPanel
           currentSlide={currentSlide}
@@ -166,16 +263,35 @@ export default function ControlApp() {
           meta={meta}
         />
       )}
-      {tab === 'edit' && (
-        <EditorPanel
-          rounds={rounds}
-          tiebreakers={tiebreakers}
-          meta={meta}
+      {tab === 'questions' && (
+        <QuestionsPanel
+          draft={draftRounds}
+          setDraft={setDraftRounds}
+          draftTiebreakers={draftTiebreakers}
+          setDraftTiebreakers={setDraftTiebreakers}
+          setDirty={setQuestionsDirty}
+          dirty={questionsDirty}
+          save={saveQuestions}
+          revert={revertQuestions}
+          reset={resetQuestions}
+          importNote={importNote}
+          setImportNote={setImportNote}
           pastes={pastes}
-          commitRounds={commitRounds}
-          commitTiebreakers={commitTiebreakers}
-          commitMeta={commitMeta}
           commitPastes={commitPastes}
+          draftMeta={draftMeta}
+          setDraftMeta={setDraftMeta}
+          setMetaDirty={setMetaDirty}
+        />
+      )}
+      {tab === 'setup' && (
+        <ShowSetupPanel
+          draftMeta={draftMeta}
+          setDraftMeta={setDraftMeta}
+          setDirty={setMetaDirty}
+          dirty={metaDirty}
+          save={saveSetup}
+          revert={revertSetup}
+          reset={resetSetup}
         />
       )}
       {tab === 'pictures' && pictureRoundEnabled && (
@@ -193,10 +309,11 @@ export default function ControlApp() {
 // ============================================================
 // HEADER
 // ============================================================
-function Header({ tab, setTab, currentSlide, pictureRoundEnabled = true }) {
+function Header({ tab, setTab, currentSlide, pictureRoundEnabled = true, questionsDirty = false, metaDirty = false }) {
   const tabs = [
     { id: 'present', label: 'Presenter' },
-    { id: 'edit', label: 'Edit Questions' },
+    { id: 'questions', label: 'Questions', dirty: questionsDirty },
+    { id: 'setup', label: 'Show Setup', dirty: metaDirty },
     { id: 'pictures', label: 'Picture Round', disabled: !pictureRoundEnabled },
   ];
   return (
@@ -215,7 +332,7 @@ function Header({ tab, setTab, currentSlide, pictureRoundEnabled = true }) {
           <button key={t.id}
             onClick={() => { if (!t.disabled) setTab(t.id); }}
             disabled={t.disabled}
-            title={t.disabled ? 'Picture round is off — enable it under "Slides to Include"' : undefined}
+            title={t.disabled ? 'Picture round is off — enable it under "Slides to Include" in the Show Setup tab' : undefined}
             style={{
               padding: '6px 14px', borderRadius: 6, border: '1px solid transparent',
               background: tab === t.id ? COLORS.accentDim : 'transparent',
@@ -226,6 +343,12 @@ function Header({ tab, setTab, currentSlide, pictureRoundEnabled = true }) {
               whiteSpace: 'nowrap',
             }}>
             {t.label}
+            {t.dirty && (
+              <span
+                title="Unsaved changes"
+                style={{ marginLeft: 6, color: COLORS.warn, fontSize: 10, verticalAlign: 'middle' }}
+              >●</span>
+            )}
           </button>
         ))}
         {/* Quick link: pop the display (no #/control hash) into a new tab —
@@ -414,28 +537,17 @@ function SlideList({ slideList, currentIndex, narrow }) {
 }
 
 // ============================================================
-// EDITOR PANEL — long form, edit metadata + questions
+// QUESTIONS PANEL — rounds + tiebreakers + import/export. Drafts and the
+// save/revert/reset actions live in ControlApp (shared surface state);
+// this panel renders them and owns the import plumbing.
 // ============================================================
-function EditorPanel({ rounds, tiebreakers, meta, pastes, commitRounds, commitTiebreakers, commitMeta, commitPastes }) {
-  const [draft, setDraft] = useState(rounds);
-  const [draftTiebreakers, setDraftTiebreakers] = useState(tiebreakers);
-  const [draftMeta, setDraftMeta] = useState(meta);
-  const [dirty, setDirty] = useState(false);
+function QuestionsPanel({
+  draft, setDraft, draftTiebreakers, setDraftTiebreakers, setDirty, dirty,
+  save, revert, reset, importNote, setImportNote,
+  pastes, commitPastes, draftMeta, setDraftMeta, setMetaDirty,
+}) {
   const [csvImport, setCsvImport] = useState(null);
-  const [importNote, setImportNote] = useState('');
   const fileInputRef = useRef(null);
-
-  // If the persisted data changes externally (e.g. another window saved), pull
-  // it in — but only when not editing, to avoid clobbering in-flight edits.
-  useEffect(() => {
-    if (!dirty) setDraft(rounds);
-  }, [rounds, dirty]);
-  useEffect(() => {
-    if (!dirty) setDraftTiebreakers(tiebreakers);
-  }, [tiebreakers, dirty]);
-  useEffect(() => {
-    if (!dirty) setDraftMeta(meta);
-  }, [meta, dirty]);
 
   const cloneQ = (q) => (typeof q === 'string' ? q : { ...q });
 
@@ -517,42 +629,6 @@ function EditorPanel({ rounds, tiebreakers, meta, pastes, commitRounds, commitTi
     setDraft((d) => renumberRounds(d.filter((_, i) => i !== ri)));
   };
 
-  const updateMeta = (section, field, value) => {
-    setDirty(true);
-    setDraftMeta((m) => ({ ...m, [section]: { ...m[section], [field]: value } }));
-  };
-
-  const save = () => {
-    commitRounds(draft);
-    commitTiebreakers(draftTiebreakers);
-    commitMeta(draftMeta);
-    setDirty(false);
-    setImportNote('');
-  };
-  const revert = () => {
-    setDraft(rounds);
-    setDraftTiebreakers(tiebreakers);
-    setDraftMeta(meta);
-    setDirty(false);
-    setImportNote('');
-  };
-  const reset = () => {
-    if (!confirm('Reset all questions, tiebreakers, and slide settings to the default General Trivia content? This will discard your edits.')) return;
-    resetRounds();
-    resetTiebreakers();
-    resetMeta();
-    const freshRounds = loadRounds();
-    const freshTiebreakers = loadTiebreakers();
-    const freshMeta = loadMeta();
-    setDraft(freshRounds);
-    setDraftTiebreakers(freshTiebreakers);
-    setDraftMeta(freshMeta);
-    setDirty(false);
-    commitRounds(freshRounds);
-    commitTiebreakers(freshTiebreakers);
-    commitMeta(freshMeta);
-  };
-
   const downloadFile = (filename, contents, mime) => {
     const blob = new Blob([contents], { type: mime });
     const url = URL.createObjectURL(blob);
@@ -565,20 +641,32 @@ function EditorPanel({ rounds, tiebreakers, meta, pastes, commitRounds, commitTi
     URL.revokeObjectURL(url);
   };
 
-  // Full deck bundle: questions + tiebreakers + picture round (data URLs
-  // included) + game meta. One file moves the whole event between machines;
-  // import it on the venue machine to restore everything. An empty paste
-  // buffer exports NO pictures section at all (rather than ten null cells);
-  // when at least one image exists the full 10-slot array ships, since the
-  // null entries are positional — they keep images in the right cells.
-  const onExport = () => {
+  // Two export flavors sharing the same v2 bundle format (meta is optional,
+  // detected by presence on import):
+  //
+  // - Questions deck: rounds + tiebreakers + pictures. The weekly swap —
+  //   importing one never touches show settings, so venue copy, rules, and
+  //   display prefs survive a new question set.
+  // - Show bundle: adds `meta`. One file moves the whole event between
+  //   machines; import it on the venue machine to restore everything.
+  //
+  // An empty paste buffer exports NO pictures section at all (rather than ten
+  // null cells); when at least one image exists the full 10-slot array ships,
+  // since the null entries are positional — they keep images in the right cells.
+  const exportDate = () => new Date().toISOString().slice(0, 10);
+  const onExportQuestions = () => {
+    const hasPictures = pastes.some((p) => p.dataUrl);
+    const payload = buildQuestionsExport(draft, draftTiebreakers,
+      hasPictures ? { pictures: pastes } : {});
+    downloadFile(`trivia-questions-${exportDate()}.json`, JSON.stringify(payload, null, 2), 'application/json');
+  };
+  const onExportBundle = () => {
     const hasPictures = pastes.some((p) => p.dataUrl);
     const payload = buildQuestionsExport(draft, draftTiebreakers, {
       ...(hasPictures ? { pictures: pastes } : {}),
       meta: draftMeta,
     });
-    const date = new Date().toISOString().slice(0, 10);
-    downloadFile(`trivia-deck-${date}.json`, JSON.stringify(payload, null, 2), 'application/json');
+    downloadFile(`trivia-show-${exportDate()}.json`, JSON.stringify(payload, null, 2), 'application/json');
   };
 
   const onDownloadTemplate = () => {
@@ -599,21 +687,28 @@ function EditorPanel({ rounds, tiebreakers, meta, pastes, commitRounds, commitTi
         // undefined here would strand the draft: buildQuestionsExport does
         // [...tiebreakers] on the next export, and the editor .maps over it.
         if (result.tiebreakers) setDraftTiebreakers(result.tiebreakers);
-        if (result.meta) setDraftMeta(sanitizeMeta(result.meta));
         setDirty(true);
+        // A bundle's meta stages into the Show Setup surface (its own draft +
+        // dirty dot) rather than committing — same review-then-save flow as
+        // the questions, just saved from its own tab. Questions-only files
+        // leave show settings completely untouched.
+        if (result.meta) {
+          setDraftMeta(sanitizeMeta(result.meta));
+          setMetaDirty(true);
+        }
         // Pictures have no draft stage — the Picture Round panel always
         // commits live — so a bundle's pictures land immediately while the
         // question/meta edits above wait for Save & Push.
+        const notes = [];
         if (result.pictures) {
           const restored = normalizePastes(result.pictures);
           const saved = commitPastes(restored);
           const count = restored.filter((p) => p.dataUrl).length;
-          setImportNote(
-            `Deck imported — ${count} picture${count === 1 ? '' : 's'} restored${saved ? '' : ' (storage full: pictures won’t survive a reload)'}. Review, then Save & Push.`
-          );
-        } else {
-          setImportNote('Questions imported. Review, then Save & Push.');
+          notes.push(`${count} picture${count === 1 ? '' : 's'} restored${saved ? '' : ' (storage full: pictures won’t survive a reload)'}`);
         }
+        notes.push('review, then Save & Push');
+        if (result.meta) notes.push('show settings staged in Show Setup — save there to push');
+        setImportNote(`Deck imported — ${notes.join('; ')}.`);
       } else if (result.kind === 'csv-full') {
         setDraft(result.rounds);
         if (result.tiebreakers) setDraftTiebreakers(result.tiebreakers);
@@ -655,20 +750,6 @@ function EditorPanel({ rounds, tiebreakers, meta, pastes, commitRounds, commitTi
     setCsvImport(null);
   };
 
-  // Cmd/Ctrl+S → Save & Push (only when there are unsaved edits).
-  const trySaveRef = useRef(() => {});
-  trySaveRef.current = () => { if (dirty) save(); };
-  useEffect(() => {
-    const onKey = (e) => {
-      if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return;
-      if (e.key !== 's' && e.key !== 'S') return;
-      e.preventDefault();
-      trySaveRef.current();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
-
   return (
     <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{
@@ -678,9 +759,10 @@ function EditorPanel({ rounds, tiebreakers, meta, pastes, commitRounds, commitTi
       }}>
         <Button onClick={save} primary disabled={!dirty}>Save & Push to Display</Button>
         <Button onClick={revert} disabled={!dirty}>Revert</Button>
-        <Button onClick={reset} secondary>Reset to Defaults</Button>
+        <Button onClick={reset} secondary>Reset Questions</Button>
         <span style={{ width: 1, height: 24, background: COLORS.border, margin: '0 4px' }} />
-        <Button onClick={onExport}>Export Deck</Button>
+        <Button onClick={onExportQuestions}>Export Questions</Button>
+        <Button onClick={onExportBundle}>Export Show Bundle</Button>
         <Button onClick={onImportClick}>Import…</Button>
         <Button onClick={onDownloadTemplate} secondary>CSV Template</Button>
         {SHEET_TEMPLATE_URL && (
@@ -695,6 +777,126 @@ function EditorPanel({ rounds, tiebreakers, meta, pastes, commitRounds, commitTi
         />
         {dirty && <span style={{ color: COLORS.warn, fontSize: 12 }}>Unsaved changes</span>}
         {importNote && <span style={{ color: COLORS.accent, fontSize: 12 }}>{importNote}</span>}
+      </div>
+
+      {draft.map((r, ri) => (
+        <Card key={r.n} title={roundCardTitle(r)}>
+          <Field label="Title" value={r.title} onChange={(v) => update([ri, 'title'], v)} />
+          <Field label="Subtitle" value={r.subtitle} onChange={(v) => update([ri, 'subtitle'], v)} multiline />
+          <Field label="Kicker" value={r.kicker} onChange={(v) => update([ri, 'kicker'], v)} />
+          <div style={{ marginTop: 14, fontSize: 11, letterSpacing: '0.2em',
+            textTransform: 'uppercase', color: COLORS.textDim }}>
+            Questions
+          </div>
+          {r.questions.map((q, qi) => (
+            <QuestionEditor
+              key={qi}
+              index={qi}
+              question={q}
+              onChange={(field, value) => updateQuestion(ri, qi, field, value)}
+              onRemove={() => removeQuestion(ri, qi)}
+              removable={r.questions.length > 1}
+            />
+          ))}
+          <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+            <Button onClick={() => addQuestion(ri)} secondary>+ Add question</Button>
+            <Button onClick={() => removeRound(ri)} secondary disabled={draft.length === 1}>
+              Remove round
+            </Button>
+          </div>
+        </Card>
+      ))}
+      <div>
+        <Button onClick={addRound} secondary>+ Add round</Button>
+      </div>
+      <Card title="Tiebreakers — Final Wager">
+        <div style={{ fontSize: 12, color: COLORS.textDim, marginBottom: 8 }}>
+          Used after the final round if teams are tied. Tied teams wager from their score, then write an answer — Final Jeopardy style. Up to three questions.
+        </div>
+        {draftTiebreakers.map((t, i) => (
+          <Field
+            key={i}
+            label={`TB${i + 1}`}
+            value={t}
+            onChange={(v) => updateTiebreaker(i, v)}
+            multiline
+            compact
+          />
+        ))}
+      </Card>
+      {csvImport && (
+        <CsvImportModal
+          csvImport={csvImport}
+          rounds={draft}
+          roundLabel={roundCardTitle}
+          onApply={applyCsvMapping}
+          onCancel={() => setCsvImport(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// SHOW SETUP PANEL — everything that isn't questions: slide toggles, display
+// settings, and all slide copy. This is the stable week-to-week surface; the
+// Questions tab turns over every event. Edits its own draft (meta only) with
+// its own Save/Revert/Reset, independent of the Questions surface.
+// ============================================================
+const ROMAN_NUMERALS = ['I', 'II', 'III', 'IV', 'V', 'VI'];
+
+// Fixed-count editor for the { t, d } item lists (house rules, costume rules,
+// wager rules, picture-round steps). No add/remove on purpose: RuleGrid and
+// the instruction step cards are designed 4-up layouts, and sanitizeItems in
+// meta.js pins the length anyway.
+function RuleItemsEditor({ items, onUpdate, numeralFor = (i) => ROMAN_NUMERALS[i] ?? String(i + 1) }) {
+  return (
+    <>
+      {items.map((it, i) => (
+        <div key={i} style={{
+          marginTop: i === 0 ? 4 : 12, paddingTop: i === 0 ? 0 : 10,
+          borderTop: i === 0 ? 'none' : `1px solid ${COLORS.border}`,
+        }}>
+          <div style={{ fontSize: 11, letterSpacing: '0.2em', textTransform: 'uppercase',
+            color: COLORS.textDim }}>
+            {numeralFor(i)}
+          </div>
+          <Field label="Title" value={it.t} onChange={(v) => onUpdate(i, 't', v)} compact />
+          <Field label="Detail" value={it.d} onChange={(v) => onUpdate(i, 'd', v)} multiline compact />
+        </div>
+      ))}
+    </>
+  );
+}
+
+function ShowSetupPanel({ draftMeta, setDraftMeta, setDirty, dirty, save, revert, reset }) {
+  const updateMeta = (section, field, value) => {
+    setDirty(true);
+    setDraftMeta((m) => ({ ...m, [section]: { ...m[section], [field]: value } }));
+  };
+  // Item-list version of updateMeta for the { t, d } rule/step arrays.
+  const updateMetaItem = (section, key, index, field, value) => {
+    setDirty(true);
+    setDraftMeta((m) => ({
+      ...m,
+      [section]: {
+        ...m[section],
+        [key]: m[section][key].map((it, i) => (i === index ? { ...it, [field]: value } : it)),
+      },
+    }));
+  };
+
+  return (
+    <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{
+        display: 'flex', gap: 8, alignItems: 'center', position: 'sticky', top: 60, zIndex: 5,
+        background: COLORS.bg, padding: '8px 0',
+        flexWrap: 'wrap', rowGap: 8,
+      }}>
+        <Button onClick={save} primary disabled={!dirty}>Save & Push to Display</Button>
+        <Button onClick={revert} disabled={!dirty}>Revert</Button>
+        <Button onClick={reset} secondary>Reset Show Setup</Button>
+        {dirty && <span style={{ color: COLORS.warn, fontSize: 12 }}>Unsaved changes</span>}
       </div>
 
       <Card title="Slides to Include">
@@ -755,6 +957,47 @@ function EditorPanel({ rounds, tiebreakers, meta, pastes, commitRounds, commitTi
         )}
       </Card>
 
+      <Card title="Title Slide">
+        <Field label="Eyebrow" value={draftMeta.title.eyebrow} onChange={(v) => updateMeta('title', 'eyebrow', v)} />
+        <Field label="Hero" value={draftMeta.title.hero} onChange={(v) => updateMeta('title', 'hero', v)} />
+        <Field label="Edition" value={draftMeta.title.edition} onChange={(v) => updateMeta('title', 'edition', v)} />
+        <Field label="Tagline" value={draftMeta.title.tagline} onChange={(v) => updateMeta('title', 'tagline', v)} />
+        <Field label="Hosts" value={draftMeta.title.hosts} onChange={(v) => updateMeta('title', 'hosts', v)} />
+        <Field label="Footer" value={draftMeta.title.footerDate} onChange={(v) => updateMeta('title', 'footerDate', v)} />
+      </Card>
+
+      <Card title="House Rules">
+        <div style={{ fontSize: 12, color: COLORS.textDim, marginBottom: 8 }}>
+          Shown on the rules slide, right after the title. Four rules — the slide is a 2×2 grid; numerals are automatic.
+        </div>
+        <RuleItemsEditor
+          items={draftMeta.rules.items}
+          onUpdate={(i, f, v) => updateMetaItem('rules', 'items', i, f, v)}
+        />
+      </Card>
+
+      <Card title="Prize Slide">
+        <div style={{ fontSize: 12, color: COLORS.textDim, marginBottom: 8 }}>
+          Only shown when the prize slide is toggled on above.
+        </div>
+        <Field label="Eyebrow" value={draftMeta.prize.eyebrow} onChange={(v) => updateMeta('prize', 'eyebrow', v)} />
+        <Field label="Heading" value={draftMeta.prize.heading} onChange={(v) => updateMeta('prize', 'heading', v)} />
+        <Field label="Banner" value={draftMeta.prize.banner} onChange={(v) => updateMeta('prize', 'banner', v)} />
+        <Field label="Amount" value={draftMeta.prize.amount} onChange={(v) => updateMeta('prize', 'amount', v)} />
+        <Field label="Award" value={draftMeta.prize.award} onChange={(v) => updateMeta('prize', 'award', v)} />
+        <Field label="Tagline" value={draftMeta.prize.tagline} onChange={(v) => updateMeta('prize', 'tagline', v)} multiline />
+      </Card>
+
+      <Card title="Costume Contest">
+        <div style={{ fontSize: 12, color: COLORS.textDim, marginBottom: 8 }}>
+          Rules shown on the costume contest slide (when toggled on above).
+        </div>
+        <RuleItemsEditor
+          items={draftMeta.costume.items}
+          onUpdate={(i, f, v) => updateMetaItem('costume', 'items', i, f, v)}
+        />
+      </Card>
+
       <Card title="Picture Round">
         {!draftMeta.show.pictureRound && (
           <div style={{ fontSize: 12, color: COLORS.warn, marginBottom: 10 }}>
@@ -800,22 +1043,26 @@ function EditorPanel({ rounds, tiebreakers, meta, pastes, commitRounds, commitTi
               ))}
             </select>
           </label>
+          <div style={{ marginTop: 16, fontSize: 11, letterSpacing: '0.2em',
+            textTransform: 'uppercase', color: COLORS.textDim }}>
+            Opener Slide
+          </div>
+          <Field label="Title" value={draftMeta.pictureRound.openerTitle} onChange={(v) => updateMeta('pictureRound', 'openerTitle', v)} />
+          <Field label="Subtitle" value={draftMeta.pictureRound.openerSubtitle} onChange={(v) => updateMeta('pictureRound', 'openerSubtitle', v)} multiline />
+          <Field label="Kicker" value={draftMeta.pictureRound.openerKicker} onChange={(v) => updateMeta('pictureRound', 'openerKicker', v)} />
+          <div style={{ marginTop: 16, fontSize: 11, letterSpacing: '0.2em',
+            textTransform: 'uppercase', color: COLORS.textDim }}>
+            Instruction Steps
+          </div>
+          <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: 6 }}>
+            The four step cards on the instructions slide. <code>{'{nextRound}'}</code> is replaced with the first trivia round&apos;s number.
+          </div>
+          <RuleItemsEditor
+            items={draftMeta.pictureRound.steps}
+            onUpdate={(i, f, v) => updateMetaItem('pictureRound', 'steps', i, f, v)}
+            numeralFor={(i) => String(i + 1).padStart(2, '0')}
+          />
         </div>
-      </Card>
-
-      <Card title="Title Slide">
-        <Field label="Eyebrow" value={draftMeta.title.eyebrow} onChange={(v) => updateMeta('title', 'eyebrow', v)} />
-        <Field label="Hero" value={draftMeta.title.hero} onChange={(v) => updateMeta('title', 'hero', v)} />
-        <Field label="Edition" value={draftMeta.title.edition} onChange={(v) => updateMeta('title', 'edition', v)} />
-        <Field label="Tagline" value={draftMeta.title.tagline} onChange={(v) => updateMeta('title', 'tagline', v)} />
-        <Field label="Hosts" value={draftMeta.title.hosts} onChange={(v) => updateMeta('title', 'hosts', v)} />
-        <Field label="Footer" value={draftMeta.title.footerDate} onChange={(v) => updateMeta('title', 'footerDate', v)} />
-      </Card>
-
-      <Card title="End Slide">
-        <Field label="Line 1" value={draftMeta.end.hero1} onChange={(v) => updateMeta('end', 'hero1', v)} />
-        <Field label="Line 2" value={draftMeta.end.hero2} onChange={(v) => updateMeta('end', 'hero2', v)} />
-        <Field label="Subtitle" value={draftMeta.end.subtitle} onChange={(v) => updateMeta('end', 'subtitle', v)} />
       </Card>
 
       <Card title="Next Event Slide">
@@ -829,60 +1076,21 @@ function EditorPanel({ rounds, tiebreakers, meta, pastes, commitRounds, commitTi
         <Field label="Detail" value={draftMeta.nextEvent.detail} onChange={(v) => updateMeta('nextEvent', 'detail', v)} multiline />
       </Card>
 
-      {draft.map((r, ri) => (
-        <Card key={r.n} title={roundCardTitle(r)}>
-          <Field label="Title" value={r.title} onChange={(v) => update([ri, 'title'], v)} />
-          <Field label="Subtitle" value={r.subtitle} onChange={(v) => update([ri, 'subtitle'], v)} multiline />
-          <Field label="Kicker" value={r.kicker} onChange={(v) => update([ri, 'kicker'], v)} />
-          <div style={{ marginTop: 14, fontSize: 11, letterSpacing: '0.2em',
-            textTransform: 'uppercase', color: COLORS.textDim }}>
-            Questions
-          </div>
-          {r.questions.map((q, qi) => (
-            <QuestionEditor
-              key={qi}
-              index={qi}
-              question={q}
-              onChange={(field, value) => updateQuestion(ri, qi, field, value)}
-              onRemove={() => removeQuestion(ri, qi)}
-              removable={r.questions.length > 1}
-            />
-          ))}
-          <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
-            <Button onClick={() => addQuestion(ri)} secondary>+ Add question</Button>
-            <Button onClick={() => removeRound(ri)} secondary disabled={draft.length === 1}>
-              Remove round
-            </Button>
-          </div>
-        </Card>
-      ))}
-      <div>
-        <Button onClick={addRound} secondary>+ Add round</Button>
-      </div>
-      <Card title="Tiebreakers — Final Wager">
-        <div style={{ fontSize: 12, color: COLORS.textDim, marginBottom: 8 }}>
-          Used after the final round if teams are tied. Tied teams wager from their score, then write an answer — Final Jeopardy style. Up to three questions.
-        </div>
-        {draftTiebreakers.map((t, i) => (
-          <Field
-            key={i}
-            label={`TB${i + 1}`}
-            value={t}
-            onChange={(v) => updateTiebreaker(i, v)}
-            multiline
-            compact
-          />
-        ))}
+      <Card title="End Slide">
+        <Field label="Line 1" value={draftMeta.end.hero1} onChange={(v) => updateMeta('end', 'hero1', v)} />
+        <Field label="Line 2" value={draftMeta.end.hero2} onChange={(v) => updateMeta('end', 'hero2', v)} />
+        <Field label="Subtitle" value={draftMeta.end.subtitle} onChange={(v) => updateMeta('end', 'subtitle', v)} />
       </Card>
-      {csvImport && (
-        <CsvImportModal
-          csvImport={csvImport}
-          rounds={draft}
-          roundLabel={roundCardTitle}
-          onApply={applyCsvMapping}
-          onCancel={() => setCsvImport(null)}
+
+      <Card title="Tiebreaker Wager Rules">
+        <div style={{ fontSize: 12, color: COLORS.textDim, marginBottom: 8 }}>
+          Shown on the Final Wager intro slide (when tiebreakers are toggled on above).
+        </div>
+        <RuleItemsEditor
+          items={draftMeta.wager.items}
+          onUpdate={(i, f, v) => updateMetaItem('wager', 'items', i, f, v)}
         />
-      )}
+      </Card>
     </div>
   );
 }
@@ -1079,7 +1287,7 @@ function PicturesPanel({ pastes, commitPastes, meta, rounds = [] }) {
         <div style={{ fontSize: 12, color: COLORS.textDim, marginBottom: 14 }}>
           Click a cell to focus it, then ⌘V (Mac) / Ctrl+V to paste an image. Or drag-drop a file.
           Once an image is in a cell, <strong>drag the image</strong> to crop / re-frame it; the ↺ button resets the crop.
-          Images are stored in this browser; <strong>Export Deck</strong> (Edit Questions tab) bundles them
+          Images are stored in this browser; <strong>Export Show Bundle</strong> (Questions tab) bundles them
           with the questions into one file you can import on another machine.
         </div>
         <div style={{
@@ -1473,14 +1681,17 @@ function buildSlideOutline(rounds, tiebreakers = [], meta = DEFAULT_META) {
     { key: 'rules', label: 'House Rules' },
   ];
   if (meta.show?.prize ?? true) {
-    list.push({ key: 'prize', label: 'Grand Prize — Curator for a Night' });
+    // Label derives from the editable prize copy so it can't drift from the
+    // slide the way the old hardcoded "$100 Gift Card" label did.
+    const prize = meta.prize || DEFAULT_META.prize;
+    list.push({ key: 'prize', label: `${prize.heading} — ${prize.amount} ${prize.award}`.trim() });
   }
   if (meta.show?.costumeContest ?? true) {
     list.push({ key: 'costume', label: 'Costume Contest' });
   }
   if (pictureRoundShown) {
     list.push(
-      { key: 'r1-open', label: 'Round 1 Opener — Picture Round' },
+      { key: 'r1-open', label: `Round 1 Opener — ${meta.pictureRound?.openerTitle || DEFAULT_META.pictureRound.openerTitle}` },
       { key: 'r1-instr', label: 'Round 1 Instructions' },
       { key: 'int-r1', label: 'Intermission · Round 1 (collect sheets)' },
       { key: 'r1-recap', label: 'Picture Round Recap (5×2 grid)' },
