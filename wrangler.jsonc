@@ -19,6 +19,11 @@
     "not_found_handling": "none"
   },
 
+  // Explicit rather than defaulted. wrangler warns that it enables workers.dev
+  // when the key is absent, and an unrouted Worker answers every path with
+  // Cloudflare error 1042 — which reads like a broken app, not a missing route.
+  "workers_dev": true,
+
   "observability": {
     "enabled": true
   }
