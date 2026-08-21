@@ -59,7 +59,7 @@ Bulk editing goes through **Export Deck / Import…**: **Export Deck** is the on
 
 Most questions get drafted in a spreadsheet before the event rather than typed in here. Two buttons seed one:
 
-- **Google Sheets Template ↗** opens Google's *Make a copy* dialog on your group's shared template. The writer gets their **own private copy** — nobody else can see it, including you, unless they share it back. Hand this button (or the link behind it) to anyone writing questions. *This deck ships with the button hidden — make the club's own template sheet and set `SHEET_TEMPLATE_ID` in `src/ControlApp.jsx` (see below).*
+- **Google Sheets Template ↗** opens Google's *Make a copy* dialog on your group's shared template. The writer gets their **own private copy** — nobody else can see it, including you, unless they share it back. Hand this button (or the link behind it) to anyone writing questions. This deck points at the shared `trivia-questions-template` sheet — blank, and already shared *Anyone with the link → Viewer*. Its header still reads "TAPROOM TRIVIA" with generic round titles; swap `SHEET_TEMPLATE_ID` in `src/ControlApp.jsx` when the club has a film-specific sheet.
 - **CSV Template** downloads the same thing as a file, for Excel or Numbers.
 
 The writer fills in the rows, then `File → Download → Comma-separated values`, and you drop that file into **Import…**. Round count and questions-per-round are read from the rows; the import reports what it loaded, and lands in the editor as unsaved changes so you can review before **Save & Push**.
@@ -69,7 +69,7 @@ Two things to know:
 - **Sheets exports only the active tab.** Keep the template to one tab.
 - **Never publish a sheet that has real questions in it.** *File → Share → Publish to web* makes it readable by anyone on the internet, and it is not the same as link-sharing. A template is safe to share because it holds no questions; the writers' copies are private by default. Leave it that way.
 
-To build your group's shared template: click **CSV Template**, then in a new Sheet use `File → Import → Upload → Replace spreadsheet` (Separator type **Comma**). Share it *Anyone with the link → Viewer* and put its file ID (from the `/d/<ID>/edit` URL — **not** a `2PACX-…` publish token) in `SHEET_TEMPLATE_ID` in `src/ControlApp.jsx`.
+To build your group's shared template: click **CSV Template**, then in a new Sheet use `File → Import → Upload → Replace spreadsheet` (Separator type **Comma**). Share it *Anyone with the link → Viewer* and put its file ID (from the `/d/<ID>/edit` URL — **not** a `2PACX-…` publish token) in `SHEET_TEMPLATE_ID` in `src/ControlApp.jsx`. An empty `SHEET_TEMPLATE_ID` hides the button entirely — if the button is missing from the Questions tab, that is why.
 
 The **Slides to Include** card has the toggle switches that hide/show Prize, Costume Contest, Picture Round, Next Event, and Tiebreakers in the deck.
 

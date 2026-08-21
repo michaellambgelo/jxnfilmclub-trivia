@@ -77,10 +77,15 @@ function useNarrowLayout() {
 // sharing setting, so a published-but-restricted sheet sends writers to a
 // sign-in wall.
 //
-// Empty string = not configured yet; the button hides rather than 404.
-// The scaffold ships unconfigured — each group makes its own template sheet
-// (see "Writing questions in a spreadsheet" in README.md) and puts the ID here.
-const SHEET_TEMPLATE_ID = '';
+// Empty string = not configured yet; the button hides rather than 404 — which
+// is why this deck showed no Sheets button until the ID below was filled in.
+//
+// This points at the shared "trivia-questions-template" sheet, the same one
+// Fertile Ground hosts copy. It is blank (no questions) and already shared
+// "Anyone with the link → Viewer". Note its header still reads "TAPROOM TRIVIA
+// — QUESTION TEMPLATE" and its round titles are ENTERTAINMENT / SPORTS /
+// GEOGRAPHY / SCIENCE; swap in a film-club-specific sheet when one exists.
+const SHEET_TEMPLATE_ID = '1egPdfvAxmPswOgZznyuYhNzRMXReV95k-D2JpAAtQ7g';
 const SHEET_TEMPLATE_URL = SHEET_TEMPLATE_ID
   ? `https://docs.google.com/spreadsheets/d/${SHEET_TEMPLATE_ID}/copy`
   : '';
