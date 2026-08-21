@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "jxnfilmclub-trivia",
+  "compatibility_date": "2026-08-21",
+
+  // Assets-only Worker: there is no server code, so no `main`. The deck is a
+  // static Vite bundle and every route is a hash (`/#/control`), so the URL
+  // path is always `/`.
+  //
+  // The presence of this file is load-bearing: without it `wrangler deploy`
+  // falls back to framework auto-detection, which requires Vite >= 6 and fails
+  // the build. Do not delete it to "let Cloudflare figure it out".
+  "assets": {
+    "directory": "./dist",
+
+    // Deliberately NOT "single-page-application". Routing here is hash-based,
+    // so path fallback buys nothing — and it would return 200 + index.html for
+    // a missing font or image, hiding real 404s behind a page that looks fine.
+    "not_found_handling": "none"
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}

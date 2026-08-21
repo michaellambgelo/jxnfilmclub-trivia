@@ -21,8 +21,8 @@ The deck has **two URLs** that you open in two separate browser windows on the s
 
 | URL | Mode | Where to open it |
 |---|---|---|
-| [`https://michaellambgelo.gitlab.io/jxnfilmclub-trivia/`](https://michaellambgelo.gitlab.io/jxnfilmclub-trivia/) | **Display** | The TV / projector / external screen the room watches |
-| [`https://michaellambgelo.gitlab.io/jxnfilmclub-trivia/#/control`](https://michaellambgelo.gitlab.io/jxnfilmclub-trivia/#/control) | **Control** | Your laptop screen — editor + presenter view |
+| [`https://jxnfilmclub-trivia.michaellamb.workers.dev/`](https://jxnfilmclub-trivia.michaellamb.workers.dev/) | **Display** | The TV / projector / external screen the room watches |
+| [`https://jxnfilmclub-trivia.michaellamb.workers.dev/#/control`](https://jxnfilmclub-trivia.michaellamb.workers.dev/#/control) | **Control** | Your laptop screen — editor + presenter view |
 | `http://localhost:5173/` | **Display** | The TV / projector / external screen the room watches |
 | `http://localhost:5173/#/control` | **Control** | Your laptop screen — editor + presenter view |
 
@@ -165,7 +165,11 @@ Palette values track `~/Workspace/jxnfilmclub/css/tokens.css`, the club's design
 
 ## Deploy
 
-Auto-deploys to GitLab Pages via `.gitlab-ci.yml` on every push to `main`. The subpath base is `/jxnfilmclub-trivia/` (set in `vite.config.js`); image fallbacks in `src/pictures.js` use `import.meta.env.BASE_URL` so they resolve in both dev (`/`) and prod. Live at `https://michaellambgelo.gitlab.io/jxnfilmclub-trivia/`.
+Auto-deploys to **Cloudflare Workers** on every push to `main`, via the Workers build integration on the GitHub repo. Cloudflare runs `npm run build` and then `npx wrangler deploy`, which reads `wrangler.jsonc` and uploads `dist/` as Worker static assets.
+
+The base is `/` (set in `vite.config.js`) because the Worker serves at the domain root; image fallbacks in `src/pictures.js` use `import.meta.env.BASE_URL` so they resolve in dev and prod alike. Live at `https://jxnfilmclub-trivia.michaellamb.workers.dev/`.
+
+`wrangler.jsonc` is load-bearing: without it `wrangler deploy` falls back to framework auto-detection, which requires Vite >= 6 and fails the deploy step even though the build succeeds.
 
 The `/#/control` route is intentionally ungated: every visitor's browser gets its own isolated `localStorage`, so writes only ever land in that visitor's own browser and every fresh session loads the `DEFAULT_*` content.
 

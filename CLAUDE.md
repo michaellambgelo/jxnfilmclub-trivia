@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-The browser-only presentation deck for **JXN Film Club trivia nights**. Deployed to GitLab Pages at `https://michaellambgelo.gitlab.io/jxnfilmclub-trivia/`.
+The browser-only presentation deck for **JXN Film Club trivia nights**. Deployed to Cloudflare Workers at `https://jxnfilmclub-trivia.michaellamb.workers.dev`.
 
 Forked from `~/Workspace/pub-trivia-scaffold` (itself descended from `star-wars-trivia-game`, handed off from Claude Design as 4 standalone files and migrated to Vite + ES modules). The scaffold stays on GitLab and remains the source-of-truth that `/new-pub-trivia-deck` clones.
 
@@ -102,7 +102,7 @@ Every identifier is namespaced `jxnfilmclub-trivia` so this deck can run beside 
 | Identifier | File |
 |---|---|
 | package name | `package.json` (+ both slots in `package-lock.json`) |
-| Vite subpath base `/jxnfilmclub-trivia/` | `vite.config.js` |
+| Worker name `jxnfilmclub-trivia` | `wrangler.jsonc` |
 | `CHANNEL_NAME` | `src/broadcast.js` |
 | `jxnfilmclub-trivia.rounds` / `.tiebreakers` | `src/rounds.js` |
 | `jxnfilmclub-trivia.pictures` | `src/pictures.js` |
@@ -135,7 +135,7 @@ In the scaffold these are theme-leak anchors that `/new-pub-trivia-deck` rewrite
 | End-slide outline fallback | `src/ControlApp.jsx` | label used when `meta.end.hero1`+`hero2` are blank |
 | Export filename | `src/ControlApp.jsx` | `` `trivia-deck-${date}.json` `` |
 | Sheets template | `src/ControlApp.jsx` `SHEET_TEMPLATE_ID` | `''` — the button stays hidden until the club has a shared template sheet |
-| Deployed URL | `scripts/deploy.sh` | `https://michaellambgelo.gitlab.io/jxnfilmclub-trivia/` — update on any redeploy or rename |
+| Deployed URL | `scripts/deploy.sh` | `https://jxnfilmclub-trivia.michaellamb.workers.dev` — update on any redeploy or rename |
 
 The internal `ACCENTS` keys (`accent-blue`, `accent-green`, `accent-red`, `accent-gold`) are **not** content — they're internal preset color identifiers, never user-visible, and their display names live in the preset values. Renaming the keys requires updating `ACCENTS` (in `slides.jsx`) plus `DEFAULT_ACCENT` and any `ROUND_ACCENTS` values in `App.jsx`, so don't.
 
@@ -155,11 +155,15 @@ Keep default questions **time-stable**: only well-attested facts that won't go s
 
 ## Deploy
 
-Auto-deploys to GitLab Pages via `.gitlab-ci.yml` on every push to `main`. Subpath base is `/jxnfilmclub-trivia/` (set in `vite.config.js`); image fallbacks in `src/pictures.js` use `import.meta.env.BASE_URL` so they resolve in both dev (`/`) and prod (`/jxnfilmclub-trivia/`). Live at `https://michaellambgelo.gitlab.io/jxnfilmclub-trivia/`.
+Auto-deploys to **Cloudflare Workers** on every push to `main` via the Workers build integration on the GitHub repo `michaellambgelo/jxnfilmclub-trivia`. Cloudflare runs `npm run build`, then `npx wrangler deploy`.
 
-`scripts/deploy.sh` (used by `/deploy`) is `git push origin main` plus the contract's `::deploy:` lines. It emits no `watch=` line — GitLab CI runs the build, and the router only watches GitHub Actions.
+**`wrangler.jsonc` is load-bearing.** It declares an assets-only Worker (no `main` — there is no server code) pointing at `./dist`. Without it, `wrangler deploy` falls back to framework auto-detection, which requires Vite >= 6 and fails with *"The version of Vite used in the project cannot be automatically configured"* — the build succeeds and the deploy step dies. Don't delete it to let Cloudflare "figure it out".
 
-This repo was cloned from the scaffold with its git remotes stripped, so the first deploy needs a remote pointed at the GitLab project `michaellambgelo/jxnfilmclub-trivia` (the project must exist and have Pages enabled, or the `pages` job has nowhere to publish).
+`not_found_handling` is `"none"`, not `"single-page-application"`. Every route here is a hash (`/#/control`), so path fallback buys nothing, and SPA mode would answer a missing font or image with `200` + `index.html` — hiding real 404s behind a page that renders fine.
+
+Base is `/` (set in `vite.config.js`), because the Worker serves `dist/` at the domain root. This differs from the scaffold's GitLab subpath base; `import.meta.env.BASE_URL` follows it, which is what `LOGO_SRC`, the grain overlay, and the `src/pictures.js` image fallbacks derive their URLs from. `wrangler` is pinned as a devDependency so CI stops installing a floating latest on every build.
+
+`scripts/deploy.sh` (used by `/deploy`) is `git push origin main` plus the contract's `::deploy:` lines. It emits no `watch=` line — the build runs in Cloudflare, not GitHub Actions, so there is no workflow for the router to watch.
 
 Each visitor's browser gets its own isolated `localStorage` — the `/#/control` route is intentionally ungated because writes only land in the visitor's own browser, and every fresh session loads `DEFAULT_*` content.
 

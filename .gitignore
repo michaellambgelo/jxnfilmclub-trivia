@@ -3,3 +3,6 @@ dist/
 .DS_Store
 *.log
 .vite/
+
+# wrangler local dev state (miniflare storage, build cache)
+.wrangler/
