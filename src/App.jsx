@@ -6,7 +6,7 @@ import {
 } from './slides.jsx';
 import { loadRounds, loadTiebreakers, recapSplitsFor, normalizeQuestion, displayRoundNumber } from './rounds.js';
 import { loadPastes, mergeItems } from './pictures.js';
-import { loadMeta, DEFAULT_META } from './meta.js';
+import { loadMeta, DEFAULT_META, sanitizeMeta } from './meta.js';
 import { broadcast, useBroadcast } from './broadcast.js';
 
 // ============================================================
@@ -52,7 +52,12 @@ function App() {
     if (msg.type === 'rounds:update') setRounds(msg.payload);
     else if (msg.type === 'pictures:update') setPastes(msg.payload);
     else if (msg.type === 'tiebreakers:update') setTiebreakers(msg.payload);
-    else if (msg.type === 'meta:update') setMeta(msg.payload);
+    else if (msg.type === 'meta:update') {
+      // Sanitize broadcast payloads exactly like loadMeta() sanitizes stored
+      // ones. A control window opened before a deploy sends a meta shape
+      // missing newer keys; unguarded, that blanks the whole deck mid-show.
+      setMeta(sanitizeMeta(msg.payload));
+    }
     else if (msg.type === 'nav:next') stage?.next();
     else if (msg.type === 'nav:prev') stage?.prev();
     else if (msg.type === 'nav:goto') stage?.goTo(msg.payload);
