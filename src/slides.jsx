@@ -198,20 +198,34 @@ function RuleBar({ echo = false }) {
   );
 }
 
+// Filmstrip frame — the club's divider mark, for a deck whose tagline is "Reel
+// Knowledge". One `evenodd` path so the center window and the eight sprockets are
+// knocked OUT of the body and the slide shows through, keeping the hollow read of
+// the stamped square this replaced. Every radius is 0 — the zine is square, and a
+// rounded frame would be the only non-dot curve in the deck.
+function ReelMark({ hex, height = 22 }) {
+  const width = Math.round((height * 32) / 24);
+  return (
+    <svg
+      width={width} height={height} viewBox="0 0 32 24"
+      fill={hex} fillRule="evenodd" aria-hidden="true"
+      style={{ display: "block", flex: "0 0 auto" }}
+    >
+      <path d="M0 0h32v24H0Z M7 4h18v16H7Z
+               M2 3.25h3v2.5H2Z M2 8.25h3v2.5H2Z M2 13.25h3v2.5H2Z M2 18.25h3v2.5H2Z
+               M27 3.25h3v2.5h-3Z M27 8.25h3v2.5h-3Z M27 13.25h3v2.5h-3Z M27 18.25h3v2.5h-3Z" />
+    </svg>
+  );
+}
+
 function AccentBar({ accentHex = PALETTE.rust, lineColor = `${PALETTE.paper}66`, lineWidth = 180 }) {
-  // Club emblem divider — two flat lines flanking a stamped square. Same
-  // geometry as the old diamond, but axis-aligned (only the Logo and Eyebrow
-  // stamps rotate) and drawn as an outlined stamp in the accent (red on ink
-  // slides, ink on the red ones) rather than a filled gold-family lozenge.
+  // Club emblem divider — two flat lines flanking a filmstrip frame. Axis-aligned
+  // (only the Logo and Eyebrow stamps rotate) and carrying the accent straight
+  // through, so it reads red on the ink slides and ink on the red ones.
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
       <span style={{ width: lineWidth, height: 3, background: lineColor }} />
-      <span style={{
-        width: 22, height: 22, background: "transparent",
-        border: `3px solid ${accentHex}`,
-        boxShadow: `inset 0 0 0 2px ${accentHex}59`,
-        flex: "0 0 auto",
-      }} />
+      <ReelMark hex={accentHex} />
       <span style={{ width: lineWidth, height: 3, background: lineColor }} />
     </div>
   );
