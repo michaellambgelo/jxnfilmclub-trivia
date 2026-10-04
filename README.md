@@ -35,7 +35,7 @@ A typical event flows through this slide order:
 1. **Title** — venue, edition, hosts, date.
 2. **Rules** — four house rules (no phones, spelling best-attempt, hosts final, have fun).
 3. **Prize** *(optional)*, **Costume Contest** *(optional)* — toggleable from Edit Questions.
-4. **Round 1 (Picture Round)** *(optional)* — opener → instructions → intermission → recap. Always image-based; the host hands out a paper sheet generated from the Picture Round tab.
+4. **Round 1 (Picture Round)** *(optional)* — opener → instructions → intermission → recap. Always image-based. By default it's played from a paper sheet generated from the Picture Round tab; switch it to **on screen** (or **both**) and a timed **Picture Show** slide plays the stills on the display right after the instructions — see [Running the picture round on screen](#running-the-picture-round-on-screen).
 5. **Rounds 2–5** *(or however many you configure — rounds and questions-per-round are editable)* — each round is opener → questions → intermission → recap. Question slides have a per-question countdown timer in the corner.
 6. **End** — sign-off slide while hosts tally scores.
 7. **Next Event** *(optional)* — announces the next trivia night (date / venue / detail, edited per event).
@@ -48,7 +48,7 @@ Anything from #3 onward (prize / costume / picture round / next event / tiebreak
 Three tabs:
 
 ### 1. Presenter tab
-A live outline of every slide in the deck with the active slide highlighted. Click any row to jump the display straight to that slide. The currently-active question slide also surfaces a **timer panel**: Start/Pause, Reset, ±10s — the timer state is broadcast to the display, so the room sees the seconds ticking down on the slide while you control it from your laptop.
+A live outline of every slide in the deck with the active slide highlighted. Click any row to jump the display straight to that slide. The currently-active question slide also surfaces a **timer panel**: Start/Pause, Reset, ±10s — the timer state is broadcast to the display, so the room sees the seconds ticking down on the slide while you control it from your laptop. On the Picture Show slide that panel becomes the **Picture Show** card (see below).
 
 ### 2. Edit Questions tab
 Cards at the top edit the **Title Slide**, **End Slide**, and **Next Event Slide** strings (eyebrow, hero text, edition, hosts, date, sign-off, next-event details). Below that, cards per round let you edit each question and answer — plus restructure the game: **add/remove questions** within a round (the "N Questions" kicker tracks the count automatically), and **add/remove whole rounds**. Edits are buffered locally — "Save & Push to Display" sends them to the display (and persists to `localStorage`), "Revert" discards.
@@ -82,6 +82,24 @@ The picture round (Round 1) needs ten themed images. The workflow:
 4. **Download Handout PNG** — same image as a file.
 
 Pictures travel with the deck: **Export Deck** on the Edit Questions tab bundles them (with the questions and game meta) into one JSON file, and **Import…** on another machine restores them instantly.
+
+## Running the picture round on screen
+
+Instead of (or as well as) handing out a picture sheet, you can show the stills on the TV one at a time, on a timer — the **Picture Show**.
+
+1. **Show Setup → Picture Round → Mode**: pick **On screen** (no picture sheet — teams still need a blank answer sheet) or **Both** (handout *and* screen). **Paper handout** is the default and leaves the deck exactly as it always was.
+2. Set **Seconds per image** (default 30) and **Passes** — how many times the whole set plays (default 2). **Sound** gives a soft tick on each still and a bell at the end. The opener and instruction-step copy switch to an on-screen version automatically; edit it right there. `{seconds}` and `{passes}` in the copy fill in from these settings (`{passes}` reads as "once" / "twice" / "three times").
+3. Paste your stills in the **Picture Round** tab as usual. Empty cells are skipped — the show keeps each still's own number, so if you filled cells 1, 2 and 4 the room sees "Still 04" for the third picture and can match it to their sheet.
+4. **Save & Push to Display.** The slide list now has a **Picture Show** slide right after the Round 1 instructions.
+
+During the event:
+
+- **Click the middle of the display window once** before the round (the left/right thirds navigate). Browsers keep sound off until the page itself has been clicked; until then the "Get Ready" card shows a small reminder and the show runs silently.
+- Advance to the Picture Show slide. It holds on **Get Ready** — nothing moves until you press **Start** on the Presenter tab's **Picture Show** card.
+- Each still shows for the set time with a big countdown, then the next appears. After the last one there's a 5-second **Second look — check your answers** card, then the next pass starts on its own. After the final pass it holds on **Pencils down**.
+- The card's buttons: **Pause / Resume**, **← Back** and **Skip →** (one still, not one slide), **−10s / +10s** on the current still, and **Restart** (back to Get Ready).
+- The deck never moves by itself — when you're ready, click **Next** to go to the intermission. Leaving the slide and coming back starts it over at Get Ready.
+- Reloading the control window mid-show is safe: it picks the show's current state back up.
 
 ## Display keyboard shortcuts
 
