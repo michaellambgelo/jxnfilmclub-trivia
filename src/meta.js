@@ -7,6 +7,17 @@ import { PICTURE_FITS, PICTURE_ASPECTS } from './pictures.js';
 
 const STORAGE_KEY = 'jxnfilmclub-trivia.meta';
 
+// Picture Show settings (meta.pictureRound.mode / showSeconds / showPasses).
+export const PICTURE_MODES = ['paper', 'screen', 'both'];
+export const PICTURE_MODE_LABELS = {
+  paper: 'Paper handout',
+  screen: 'On screen (timed Picture Show)',
+  both: 'Both — handout + on screen',
+};
+export const SHOW_SECONDS_MIN = 5;
+export const SHOW_SECONDS_MAX = 180;
+export const SHOW_PASSES_MAX = 3;
+
 export const DEFAULT_META = {
   title: {
     eyebrow: "Presented by JXN Film Club",
@@ -112,6 +123,29 @@ export const DEFAULT_META = {
       { t: "Identify the films", d: "Identify the film, the director, or the year. Write your answer next to each numbered still." },
       { t: "Return your answers", d: "Hand the sheet back to the hosts before Round {nextRound} begins." },
     ],
+    // ── Picture Show (on-screen, timed picture round) ──────────────────────
+    // "paper" = the handout-only round (the deck is exactly as before);
+    // "screen" = the stills play on the display, one at a time, with a
+    // countdown (PictureShowSlide is inserted after the instructions);
+    // "both" = handout AND on-screen show. See PICTURE_MODES.
+    mode: "paper",
+    showSeconds: 30,   // seconds per image (clamped SHOW_SECONDS_MIN..MAX)
+    showPasses: 2,     // times the whole set plays (clamped 1..SHOW_PASSES_MAX)
+    showSound: true,   // tick on image change + ding at "Pencils down"
+    // Screen-mode copy — used instead of openerSubtitle/openerKicker/steps when
+    // mode is "screen" (paper/both use the paper copy above). Tokens, here and
+    // in the paper copy: {nextRound} → first trivia round's number,
+    // {seconds} → showSeconds, {passes} → "once" / "twice" / "three times".
+    screenOpenerSubtitle: "Ten stills, no titles, up on the big screen — {seconds} seconds each. The reel runs {passes}.",
+    screenOpenerKicker: "Eyes On The Screen",
+    screenSteps: [
+      { t: "Form your team", d: "Gather your group and pick a team name. Pun-heavy or on-theme is encouraged." },
+      { t: "Watch the screen", d: "Each still holds for {seconds} seconds, and the whole reel runs {passes}." },
+      { t: "Identify the films", d: "Next to each still's number, write the film, the director, or the year." },
+      { t: "Return your answers", d: "Hand your answer sheet back to the hosts before Round {nextRound} begins." },
+    ],
+    // "both" mode: one extra line on the instructions slide (paper copy otherwise).
+    bothNote: "The stills also play on the big screen — {seconds} seconds each, the whole reel {passes}.",
   },
   // Display tweaks — question-slide options.
   // App.jsx derives `tweaks = meta.display`; slides consume it unchanged.
@@ -135,7 +169,11 @@ function clone(meta) {
     prize: { ...meta.prize },
     costume: { items: meta.costume.items.map((it) => ({ ...it })) },
     wager: { items: meta.wager.items.map((it) => ({ ...it })) },
-    pictureRound: { ...meta.pictureRound, steps: meta.pictureRound.steps.map((it) => ({ ...it })) },
+    pictureRound: {
+      ...meta.pictureRound,
+      steps: meta.pictureRound.steps.map((it) => ({ ...it })),
+      screenSteps: meta.pictureRound.screenSteps.map((it) => ({ ...it })),
+    },
     display: { ...meta.display },
   };
 }
@@ -153,6 +191,18 @@ function sanitizeItems(parsed, defaults) {
 
 function pickString(value, fallback) {
   return typeof value === 'string' ? value : fallback;
+}
+
+// Finite number (numeric strings accepted), rounded and clamped; anything
+// else (NaN, "abc", objects, null) degrades to the fallback.
+function pickInt(value, fallback, lo, hi) {
+  const n = typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  if (typeof n !== 'number' || !Number.isFinite(n)) return fallback;
+  return Math.min(hi, Math.max(lo, Math.round(n)));
+}
+
+function pickBool(value, fallback) {
+  return typeof value === 'boolean' ? value : fallback;
 }
 
 // Merge persisted state with defaults so adding a new field doesn't blow up
@@ -199,12 +249,60 @@ function withDefaults(parsed) {
       openerSubtitle: pickString(parsed?.pictureRound?.openerSubtitle, DEFAULT_META.pictureRound.openerSubtitle),
       openerKicker: pickString(parsed?.pictureRound?.openerKicker, DEFAULT_META.pictureRound.openerKicker),
       steps: sanitizeItems(parsed?.pictureRound?.steps, DEFAULT_META.pictureRound.steps),
+      // Picture Show — absent in pre-Picture-Show saves/bundles → defaults
+      // (mode "paper", so those decks compose exactly as before).
+      mode: PICTURE_MODES.includes(parsed?.pictureRound?.mode)
+        ? parsed.pictureRound.mode
+        : DEFAULT_META.pictureRound.mode,
+      showSeconds: pickInt(parsed?.pictureRound?.showSeconds, DEFAULT_META.pictureRound.showSeconds, SHOW_SECONDS_MIN, SHOW_SECONDS_MAX),
+      showPasses: pickInt(parsed?.pictureRound?.showPasses, DEFAULT_META.pictureRound.showPasses, 1, SHOW_PASSES_MAX),
+      showSound: pickBool(parsed?.pictureRound?.showSound, DEFAULT_META.pictureRound.showSound),
+      screenOpenerSubtitle: pickString(parsed?.pictureRound?.screenOpenerSubtitle, DEFAULT_META.pictureRound.screenOpenerSubtitle),
+      screenOpenerKicker: pickString(parsed?.pictureRound?.screenOpenerKicker, DEFAULT_META.pictureRound.screenOpenerKicker),
+      screenSteps: sanitizeItems(parsed?.pictureRound?.screenSteps, DEFAULT_META.pictureRound.screenSteps),
+      bothNote: pickString(parsed?.pictureRound?.bothNote, DEFAULT_META.pictureRound.bothNote),
     },
     display: {
       showQNumbers: display.showQNumbers ?? DEFAULT_META.display.showQNumbers,
       showTimer: display.showTimer ?? DEFAULT_META.display.showTimer,
       timerSeconds: display.timerSeconds ?? DEFAULT_META.display.timerSeconds,
     },
+  };
+}
+
+// ── Picture-round copy helpers ─────────────────────────────────────────────
+const PASS_WORDS = { 1: 'once', 2: 'twice', 3: 'three times' };
+export function passesWord(n) {
+  return PASS_WORDS[n] || `${n} times`;
+}
+
+// Substitute the picture-round copy tokens. {passes} is a WORD ("twice") so
+// copy reads naturally for every allowed pass count.
+export function fillPictureTokens(str, { nextRound = 2, seconds, passes } = {}) {
+  if (typeof str !== 'string') return '';
+  return str
+    .replace(/\{nextRound\}/g, String(nextRound))
+    .replace(/\{seconds\}/g, String(seconds ?? DEFAULT_META.pictureRound.showSeconds))
+    .replace(/\{passes\}/g, passesWord(passes ?? DEFAULT_META.pictureRound.showPasses));
+}
+
+// The copy set the deck should show for the current mode, tokens filled:
+// screen → the screen* fields; paper/both → the paper fields (+ bothNote in
+// "both"). Single source for App.jsx (opener), slides.jsx (instructions) and
+// any future consumer, so the mode → copy mapping can't drift.
+export function pictureCopyFor(pictureRound, nextRound = 2) {
+  const pr = pictureRound || DEFAULT_META.pictureRound;
+  const mode = PICTURE_MODES.includes(pr.mode) ? pr.mode : 'paper';
+  const tok = { nextRound, seconds: pr.showSeconds, passes: pr.showPasses };
+  const fill = (s) => fillPictureTokens(s, tok);
+  const screen = mode === 'screen';
+  const steps = (screen ? pr.screenSteps : pr.steps) || DEFAULT_META.pictureRound.steps;
+  return {
+    mode,
+    openerSubtitle: fill(screen ? pr.screenOpenerSubtitle : pr.openerSubtitle),
+    openerKicker: fill(screen ? pr.screenOpenerKicker : pr.openerKicker),
+    steps: steps.map((it) => ({ t: fill(it.t), d: fill(it.d) })),
+    note: mode === 'both' ? fill(pr.bothNote) : '',
   };
 }
 
