@@ -2,11 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ACCENTS, TitleSlide, RulesSlide, PrizeSlide, CostumeContestSlide,
   RoundOpener, PictureRoundInstructions, PictureShowSlide, IntermissionSlide, QuestionSlide,
-  RoundRecap, PictureRoundRecap, TiebreakerIntroSlide, EndSlide, NextEventSlide,
+  RoundRecap, PictureAnswerSlide, TiebreakerIntroSlide, EndSlide, NextEventSlide,
   JoinClubSlide,
 } from './slides.jsx';
 import { loadRounds, loadTiebreakers, recapSplitsFor, normalizeQuestion, displayRoundNumber } from './rounds.js';
-import { loadPastes, mergeItems } from './pictures.js';
+import { loadPastes, mergeItems, normalizePastes, walkthroughSlots } from './pictures.js';
 import { loadMeta, DEFAULT_META, sanitizeMeta, pictureCopyFor } from './meta.js';
 import { broadcast, useBroadcast } from './broadcast.js';
 import { unlockAudio } from './chime.js';
@@ -52,7 +52,7 @@ function App() {
   useBroadcast(useCallback((msg) => {
     const stage = stageRef.current;
     if (msg.type === 'rounds:update') setRounds(msg.payload);
-    else if (msg.type === 'pictures:update') setPastes(msg.payload);
+    else if (msg.type === 'pictures:update') setPastes(normalizePastes(msg.payload));
     else if (msg.type === 'tiebreakers:update') setTiebreakers(msg.payload);
     else if (msg.type === 'meta:update') {
       // Sanitize broadcast payloads exactly like loadMeta() sanitizes stored
@@ -125,7 +125,7 @@ function App() {
   }
 
   // 5-8. Picture Round (toggleable as a unit: opener + instructions
-  // [+ Picture Show] + intermission + recap). The opener/instruction copy is
+  // [+ Picture Show] + intermission + answer walkthrough). The opener/instruction copy is
   // mode-dependent (paper vs screen) — pictureCopyFor picks the set and fills
   // the {nextRound}/{seconds}/{passes} tokens.
   if (meta.show.pictureRound) {
@@ -171,15 +171,26 @@ function App() {
         tweaks={tweaks} accent={rounds[0] ? accentFor(rounds[0].n, accent) : accent}
       />
     );
-    slides.push(
-      <PictureRoundRecap
-        key="r1-recap"
-        items={pictureItems}
-        tweaks={tweaks}
-        accent={accent}
-        pictureRound={meta.pictureRound}
-      />
-    );
+    // Answer walkthrough (replaced the 5×2 recap grid): two slides per slot
+    // that has a picture — the picture alone, then the reveal. After the
+    // intermission so sheets are in before answers show. Mirror:
+    // buildSlideOutline.
+    const answerSlots = walkthroughSlots(pastes);
+    answerSlots.forEach((slot, k) => {
+      [1, 2].forEach((step) => {
+        slides.push(
+          <PictureAnswerSlide
+            key={`r1-ans-${slot + 1}-${step === 1 ? 'pic' : 'reveal'}`}
+            item={pictureItems[slot]}
+            number={slot + 1}
+            step={step}
+            position={k + 1}
+            total={answerSlots.length}
+            accent={accent}
+          />
+        );
+      });
+    });
   }
 
   // Rounds 2-5 — each round picks up its own accent from ROUND_ACCENTS

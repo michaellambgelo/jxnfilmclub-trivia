@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { broadcast, useBroadcast } from './broadcast.js';
-import { resolveAspect, pictureGridLayout } from './pictures.js';
+import { useImageUrl } from './imageStore.js';
 import { initialShow, reduceShow, secondsLeft, SHOW_GAP_MS } from './pictureShow.js';
 import { playTick, playDing, isAudioUnlocked } from './chime.js';
 import { DEFAULT_META, pictureCopyFor } from './meta.js';
@@ -728,9 +728,10 @@ function useSlideActive(ref) {
 }
 
 // The images the show actually plays, numbered by their slot (1-based).
-// Pasted data URLs always count; a slot's disk fallback
-// (public/images/picture-NN.png) counts only if it really loads — probing
-// with Image() also rejects a dev server's HTML fallback for a missing file.
+// Pasted pictures (a stored imageId or a legacy data URL) always count; a
+// slot's disk fallback (public/images/picture-NN.png) counts only if it
+// really loads — probing with Image() also rejects a dev server's HTML
+// fallback for a missing file.
 function useShowPlaylist(items) {
   const [diskOk, setDiskOk] = useState({});
   const probeKey = items.map((it) => (it.isPasted ? "" : it.src || "")).join("|");
@@ -961,9 +962,9 @@ function PictureShowSlide({ items, pictureRound, accent }) {
           {/* Every image stays mounted (decoded) so changes don't flash; only
               the current one is visible. Captions are deliberately hidden. */}
           {playlist.map((it, i) => (
-            <img
+            <StoredImg
               key={it.number}
-              src={it.src}
+              item={it}
               alt={`Still ${it.number}`}
               style={{
                 position: "absolute", inset: 0, width: "100%", height: "100%",
@@ -1446,68 +1447,87 @@ function IntermissionSlide({ nextRound, nextTitle, nextLabel, label }) {
   );
 }
 
-function PictureRecapCell({ item, index, fit = "cover", aspect = "316 / 220" }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => { setFailed(false); }, [item.src]);
-  const showImage = item.src && !failed;
-  // The cell IS the photo box. The aspect matches the canvas handout cell so
-  // the same objectPosition produces the same visible crop on both. `fit`
-  // "cover" crops to fill; "contain" letterboxes the whole image (flag round),
-  // where panning is meaningless so the image is simply centered. The answer
-  // line that lives under each cell on the canvas is intentionally omitted on
-  // screen — it's only useful where contestants are writing.
+// ============================================================
+// PICTURE IMAGES — one <img> for a picture-round image, wherever it lives.
+// Resolution order: a stored id (IndexedDB via useImageUrl, refreshed on
+// `images:update`) → an inline data URL (legacy buffers / no IndexedDB) →
+// the slot's disk fallback → `placeholder`. Never renders a broken <img>:
+// a missing record, an unavailable store, or a failed load all fall through.
+// A component (not a hook) so callers can render it inside .map.
+// ============================================================
+function StoredImg({ id, item, alt, style, placeholder = null }) {
+  // `item` = a mergeItems() entry (slot picture); `id` = a bare image id
+  // (answer images). Exactly one is passed.
+  const imageId = item ? item.imageId : id;
+  const { url, status } = useImageUrl(imageId || null);
+  const candidates = [];
+  if (imageId) {
+    if (status === 'ready' && url) candidates.push(url);
+    else if (status === 'loading') return placeholder;
+  }
+  if (item?.dataUrl) candidates.push(item.dataUrl);
+  if (item && !imageId && !item.dataUrl && item.fallbackSrc) candidates.push(item.fallbackSrc);
+  return <FallbackImg candidates={candidates} alt={alt} style={style} placeholder={placeholder} />;
+}
+
+function FallbackImg({ candidates, alt, style, placeholder }) {
+  const key = candidates.join("|");
+  const [failed, setFailed] = useState(0);
+  useEffect(() => { setFailed(0); }, [key]);
+  const src = candidates[failed];
+  if (!src) return placeholder;
+  return (
+    <img
+      src={src}
+      alt={alt}
+      draggable={false}
+      onError={() => setFailed((n) => n + 1)}
+      style={style}
+    />
+  );
+}
+
+function PhotoPlaceholder({ size = 34 }) {
   return (
     <div style={{
-      aspectRatio: resolveAspect(aspect).css,
-      position: "relative",
-      background: `${PALETTE.paper}0D`,
-      border: `2px solid ${PALETTE.paper}47`,
-      overflow: "hidden",
+      position: "absolute", inset: 0,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontFamily: displayFont, fontSize: size, fontWeight: 600,
+      color: `${PALETTE.paper}66`, letterSpacing: "0.3em", textTransform: "uppercase",
     }}>
-      {showImage ? (
-        <img
-          src={item.src}
-          alt={item.caption || `Picture ${index + 1}`}
-          onError={() => setFailed(true)}
-          style={{
-            width: "100%", height: "100%", objectFit: fit, display: "block",
-            objectPosition: fit === "contain"
-              ? "center"
-              : `${item.position?.x ?? 50}% ${item.position?.y ?? 50}%`,
-          }}
-        />
-      ) : (
-        <div style={{
-          position: "absolute", inset: 0,
-          display: "flex", alignItems: "center", justifyContent: "center",
-        }}>
-          <div style={{
-            fontFamily: displayFont, fontSize: 28, fontWeight: 600,
-            color: `${PALETTE.paper}66`, letterSpacing: "0.3em", textTransform: "uppercase",
-          }}>
-            PHOTO
-          </div>
-        </div>
-      )}
+      PHOTO
+    </div>
+  );
+}
+
+// A framed, letterboxed image panel (picture or answer image) for the
+// answer walkthrough. `flex` sizes it in the row; the image is always
+// object-fit: contain so nothing in the answer is cropped away.
+function AnswerPanel({ id, item, alt, label, flex = 1, labelColor }) {
+  return (
+    <div style={{ flex, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={{
-        position: "absolute", top: 12, left: 12,
-        width: 50, height: 50,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        fontFamily: displayFont, fontWeight: 700, fontSize: 26,
-        color: PALETTE.paper, background: PALETTE.rust,
-        border: `2px solid ${PALETTE.inkDeep}`,
+        flex: 1, minHeight: 0, position: "relative",
+        background: PALETTE.inkDeep, border: `3px solid ${PALETTE.inkDeep}`,
+        boxShadow: hardShadow(10, `${PALETTE.inkDeep}99`), overflow: "hidden",
       }}>
-        {String(index + 1).padStart(2, "0")}
+        <StoredImg
+          id={id}
+          item={item}
+          alt={alt}
+          placeholder={<PhotoPlaceholder />}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+        />
       </div>
-      {item.caption && (
+      {label !== undefined && (
         <div style={{
-          position: "absolute", bottom: 0, left: 0, right: 0,
-          padding: "10px 14px",
-          background: `linear-gradient(180deg, transparent, ${PALETTE.inkDeep}D9)`,
-          fontFamily: bodyFont, fontSize: 28, fontWeight: 500,
-          color: PALETTE.paper, letterSpacing: "0.02em",
+          minHeight: 52, textAlign: "center",
+          fontFamily: displayFont, fontWeight: 700, fontSize: 44, lineHeight: 1.1,
+          letterSpacing: "0.04em", textTransform: "uppercase",
+          color: labelColor || PALETTE.paper,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         }}>
-          {item.caption}
+          {label}
         </div>
       )}
     </div>
@@ -1515,62 +1535,94 @@ function PictureRecapCell({ item, index, fit = "cover", aspect = "316 / 220" }) 
 }
 
 // ============================================================
-// SLIDE: PICTURE ROUND RECAP
-// 5×2 grid for discussing picture round answers + serves as the print
-// design for the paper handout. Cells are placeholder boxes when item.src
-// is null; render an <img> when src is present.
+// SLIDE: PICTURE ANSWER — the answer walkthrough that replaced the old 5×2
+// recap grid. App.jsx inserts TWO of these per slot that has a picture, in
+// slot order, where the recap used to sit (after the Round 1 intermission):
+//   step 1 — the picture alone, large ("Still 03 · Answer" — this deck
+//            says "still" on audience-facing slides). No answer
+//            text, labels, or answer images: the room takes one more look.
+//   step 2 — the reveal. Two answer images → A | picture | B (labels under
+//            the originals); one → picture | answer image; none → picture.
+//            The answer text (caption, or "A · B" from the labels) sits
+//            large underneath.
+// Host-advanced like every other slide. Labels "STILL 03" / "STILL 03
+// ANSWER" (mirrored by buildSlideOutline; they don't match App's timer regex,
+// so the timer card clears).
 // ============================================================
-function PictureRoundRecap({ items, accent, pictureRound }) {
-  const fit = pictureRound?.fit ?? "cover";
-  const aspect = pictureRound?.aspect ?? "316 / 220";
-  // Cap the grid width so tall aspects (square) shrink + center instead of
-  // overflowing the 2-row grid into the footer. `availH` is the vertical budget
-  // between the header and the footer; cells have no answer area on screen so
-  // cellExtra is 0. For the default landscape aspect this returns full width.
-  const grid = pictureGridLayout({
-    aspect, cols: 5, rows: 2, contentW: 1920 - SPACING.paddingX * 2,
-    availH: 560, gap: 20, cellExtra: 0,
-  });
+function PictureAnswerSlide({ item, number, step = 1, position, total, accent }) {
+  const n = pad2(number);
+  const reveal = step === 2;
+  const answerA = item.answerImageAId;
+  const answerB = item.answerImageBId;
+  const answerText = reveal ? (item.answerText || "") : "";
+  const counter = position && total ? `${pad2(position)} / ${pad2(total)}` : "";
+
+  let row;
+  if (!reveal) {
+    row = <AnswerPanel item={item} alt={`Still ${number}`} />;
+  } else if (answerA && answerB) {
+    row = (<>
+      <AnswerPanel id={answerA} alt="" label={item.answerLabelA || ""} />
+      <AnswerPanel item={item} alt={`Still ${number}`} flex={1.35} label="" />
+      <AnswerPanel id={answerB} alt="" label={item.answerLabelB || ""} />
+    </>);
+  } else if (answerA || answerB) {
+    const id = answerA || answerB;
+    const label = answerA ? item.answerLabelA : item.answerLabelB;
+    row = (<>
+      <AnswerPanel item={item} alt={`Still ${number}`} label="" />
+      <AnswerPanel id={id} alt="" label={label || ""} />
+    </>);
+  } else {
+    row = <AnswerPanel item={item} alt={`Still ${number}`} />;
+  }
+
   return (
-    <section data-label="Picture Round Recap">
+    <section data-label={reveal ? `STILL ${n} ANSWER` : `STILL ${n}`}>
       <div style={slideBase}>
         <Frame />
-
         <div style={{
-          padding: `90px ${SPACING.paddingX}px 92px`,
-          height: "100%", display: "flex", flexDirection: "column",
+          padding: `${SPACING.paddingTop - 20}px ${SPACING.paddingX}px 110px`,
+          height: "100%", display: "flex", flexDirection: "column", boxSizing: "border-box",
         }}>
-          <Eyebrow accentHex={accent.hex}>Round 01 · Recap</Eyebrow>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 28, marginTop: 18 }}>
-            <div style={{
-              fontFamily: displayFont, fontWeight: 700, fontSize: 76,
-              letterSpacing: "0.03em", textTransform: "uppercase", color: PALETTE.paper,
-            }}>
-              Picture Round
-            </div>
-            <div style={{
-              fontFamily: bodyFont, fontStyle: "italic",
-              fontSize: 32, color: `${PALETTE.paper}B3`,
-            }}>
-              {pictureRound?.instruction ?? DEFAULT_META.pictureRound.instruction}
-            </div>
-          </div>
-          <RuleBar />
-
           <div style={{
-            marginTop: 28, flex: 1, display: "grid",
-            gridTemplateColumns: "repeat(5, 1fr)", alignContent: "center",
-            gap: 20, width: grid.gridW, alignSelf: "center",
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            paddingBottom: 22, borderBottom: `2px solid ${PALETTE.paper}38`, minHeight: 80,
           }}>
-            {items.map((item, i) => (
-              <PictureRecapCell key={i} item={item} index={i} fit={fit} aspect={aspect} />
-            ))}
+            <div style={{
+              fontFamily: displayFont, fontWeight: 600, fontSize: TYPE_SCALE.meta,
+              letterSpacing: "0.28em", textTransform: "uppercase", color: accent.hex,
+            }}>
+              Still {n} · Answer
+            </div>
+            <div style={{
+              fontFamily: displayFont, fontWeight: 700, fontSize: 80, lineHeight: 1,
+              color: PALETTE.paper, textShadow: hardShadow(5, PALETTE.rustDeep),
+            }}>
+              {n}
+            </div>
           </div>
+
+          <div style={{ flex: 1, minHeight: 0, display: "flex", gap: 40, marginTop: 30 }}>
+            {row}
+          </div>
+
+          {reveal && answerText && (
+            <div style={{
+              marginTop: 26, textAlign: "center",
+              fontFamily: heroFont, fontWeight: 900, fontStyle: "italic",
+              fontSize: answerText.length > 34 ? 64 : 88, lineHeight: 1.05,
+              letterSpacing: "-0.01em", textTransform: "uppercase", color: accent.hex, textShadow: hardShadow(6),
+              overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+            }}>
+              {answerText}
+            </div>
+          )}
         </div>
 
         <FooterBar
-          left="Picture Round · Recap"
-          right={`${items.length} Photos · Discuss Answers`}
+          left="Round 01 · Still Answers"
+          right={reveal ? `Still ${n} · Answer${counter ? ` · ${counter}` : ""}` : `Still ${n}${counter ? ` · ${counter}` : ""}`}
           accentHex={accent.hex}
         />
       </div>
@@ -1798,7 +1850,7 @@ function JoinClubSlide({ accent, joinClub }) {
 
 export {
   TitleSlide, RulesSlide, PrizeSlide, CostumeContestSlide, RoundOpener,
-  PictureRoundInstructions, PictureShowSlide, QuestionSlide, RoundRecap, PictureRoundRecap,
+  PictureRoundInstructions, PictureShowSlide, QuestionSlide, RoundRecap, PictureAnswerSlide,
   IntermissionSlide, TiebreakerIntroSlide, EndSlide, NextEventSlide, JoinClubSlide,
   ACCENTS, PALETTE,
 };
