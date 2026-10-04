@@ -12,8 +12,18 @@ import {
 } from './meta.js';
 import {
   loadPastes, savePastes, clearPastes, mergeItems, normalizePastes, ingestImage,
-  PICTURE_ASPECTS, resolveAspect,
+  PICTURE_ASPECTS, resolveAspect, emptyPaste, hasPicture, slotHasContent, pastesHaveContent,
+  answerTextFor, referencedPictureIds, walkthroughSlots, pictureAnswerLines, isFaceMashSlot,
+  migratePastes, applyMigration, inlineBundlePictures,
 } from './pictures.js';
+import {
+  addImage, putImage, dataUrlToBlob, newImageId, holdMedia, gcImages, useImageUrl,
+  isImageStoreAvailable, exportImages, importImages, ImageStoreUnavailableError,
+} from './imageStore.js';
+import {
+  decodeToCanvas, compose as composeFaceMash, isReady as faceMashReady,
+  LANDMARK_PROMPTS, DEFAULT_CONTROLS as FACE_MASH_CONTROLS,
+} from './faceMash.js';
 import {
   copyHandoutToClipboard, downloadHandoutPng, downloadAnswersHandoutPng,
 } from './handout.js';
@@ -104,6 +114,25 @@ function describeImport({ rounds, tiebreakers }) {
   return `Imported ${parts.join(' · ')}.`;
 }
 
+// Save `contents` (string or Blob) as a download via a throwaway anchor.
+// Shared by the Questions exports and the Utilities tools.
+function downloadFile(filename, contents, mime) {
+  const blob = contents instanceof Blob ? contents : new Blob([contents], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoke on the next tick — some browsers start the download asynchronously.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+// GC runs this long after the last persisted paste commit (caption typing,
+// crop drags, and a Face Mash's slot write coalesce into one sweep).
+const GC_DELAY_MS = 1500;
+
 // ============================================================
 // CONTROL APP
 // ============================================================
@@ -147,13 +176,152 @@ export default function ControlApp() {
     broadcast('meta:update', next);
   }, []);
 
+  // ---- Picture buffer + image store -------------------------------------
+  // Pictures have no draft stage: every edit commits live (persist +
+  // broadcast). `pastesRef` always holds the latest committed buffer so
+  // async writers (paste ingest, imports, the Face Mash Maker, migration)
+  // build on current state via updatePastes(fn), never on a stale closure.
+  const pastesRef = useRef(pastes);
+  // null = still probing, true/false = IndexedDB usable in this browser.
+  const [imagesAvailable, setImagesAvailable] = useState(null);
+  const [pictureNote, setPictureNote] = useState('');
+  const imagesAvailableRef = useRef(null);
+  imagesAvailableRef.current = imagesAvailable;
+  const gcTimerRef = useRef(null);
+
+  useEffect(() => {
+    let live = true;
+    isImageStoreAvailable().then((ok) => { if (live) setImagesAvailable(ok); });
+    return () => { live = false; };
+  }, []);
+
+  // Garbage-collect image records no slot references, a beat after the
+  // last commit. Only after a SUCCESSFUL save — if localStorage refused the
+  // write, the persisted buffer still points at the old ids and a reload
+  // would need them. gcImages also keeps every id held by an in-flight
+  // writer (holdMedia).
+  const scheduleGc = useCallback(() => {
+    clearTimeout(gcTimerRef.current);
+    gcTimerRef.current = setTimeout(() => {
+      if (imagesAvailableRef.current !== true) return;
+      gcImages(referencedPictureIds(pastesRef.current)).catch(() => {});
+    }, GC_DELAY_MS);
+  }, []);
+
   // Broadcast BEFORE persisting: if the localStorage write fails (quota),
-  // the display still gets the images for this session. Returns the save
+  // the display still gets the pictures for this session. Returns the save
   // result so panels can warn that the buffer won't survive a reload.
   const commitPastes = useCallback((next) => {
-    setPastes(next);
-    broadcast('pictures:update', next);
-    return savePastes(next);
+    const normalized = normalizePastes(next);
+    pastesRef.current = normalized;
+    setPastes(normalized);
+    broadcast('pictures:update', normalized);
+    const saved = savePastes(normalized);
+    if (saved) scheduleGc();
+    return saved;
+  }, [scheduleGc]);
+
+  // Functional commit against the latest buffer — the one write path every
+  // picture editor uses (Picture Round tab, import, Utilities, migration).
+  const updatePastes = useCallback(
+    (fn) => commitPastes(fn(pastesRef.current)),
+    [commitPastes],
+  );
+
+  // ---- Legacy data-URL migration (control window only) ---------------------
+  // Buffers saved before the image store, and v1/v2 bundle imports, carry
+  // pictures inline as data URLs. Move each into IndexedDB as-is (no
+  // re-encode) and swap in its id — per slot, only after that write
+  // succeeds. The display never migrates (it's a reader; two writers would
+  // race and orphan ids). A slot whose write fails keeps its data URL and
+  // isn't retried this session.
+  const migratingRef = useRef(false);
+  const migrationSkipRef = useRef(new Set());
+  const [migrationTick, setMigrationTick] = useState(0);
+  useEffect(() => {
+    if (imagesAvailable !== true || migratingRef.current) return;
+    const skip = migrationSkipRef.current;
+    if (!pastes.some((p) => p.dataUrl && !skip.has(p.dataUrl))) return;
+    migratingRef.current = true;
+    const original = pastesRef.current;
+    const releases = [];
+    (async () => {
+      const res = await migratePastes(original, async (dataUrl) => {
+        if (skip.has(dataUrl)) throw new Error('skipped');
+        const id = newImageId();
+        releases.push(holdMedia([id]));
+        await putImage(dataUrlToBlob(dataUrl), { id, kind: 'picture' });
+        return id;
+      });
+      res.failed.forEach((i) => { if (original[i]?.dataUrl) skip.add(original[i].dataUrl); });
+      if (res.migrated.length) {
+        commitPastes(applyMigration(pastesRef.current, original, res.ids));
+      }
+      if (res.unavailable) setImagesAvailable(false);
+      if (res.failed.length) {
+        setPictureNote(`${plural(res.failed.length, 'picture')} couldn’t move into image storage and still live in this browser’s localStorage (they still show).`);
+      }
+    })().catch(() => {}).finally(() => {
+      releases.forEach((release) => release());
+      migratingRef.current = false;
+      setMigrationTick((t) => t + 1);
+    });
+  }, [pastes, imagesAvailable, migrationTick, commitPastes]);
+
+  // Deck-bundle pictures. v3: `images` restore into the store under their
+  // original ids, then the slots commit. v1/v2: slots carry data URLs, so
+  // they commit as-is and the migration effect above moves them. With no
+  // IndexedDB a v3 bundle's pictures are inlined back as data URLs (answer
+  // images can't be, and are dropped). Resolves a note for the import line.
+  const importPictures = useCallback(async (pictures, images) => {
+    let restored = normalizePastes(pictures);
+    const imageIds = Object.keys(images || {});
+    const release = holdMedia(imageIds);
+    const notes = [];
+    try {
+      if (imageIds.length) {
+        let inline = imagesAvailableRef.current === false;
+        if (!inline) {
+          try {
+            const { failed } = await importImages(images);
+            if (failed) notes.push(`${plural(failed, 'image')} unreadable, skipped`);
+          } catch (err) {
+            inline = true;
+            if (err instanceof ImageStoreUnavailableError) setImagesAvailable(false);
+            notes.push(`image storage failed (${err.message})`);
+          }
+        }
+        if (inline) {
+          restored = inlineBundlePictures(restored, images);
+          notes.push('answer images dropped — no image storage in this browser');
+        }
+      }
+      const saved = commitPastes(restored);
+      const count = restored.filter(hasPicture).length;
+      return `${plural(count, 'picture')} restored${notes.length ? ` (${notes.join('; ')})` : ''}${saved ? '' : ' (storage full: pictures won’t survive a reload)'}`;
+    } finally {
+      release();
+    }
+  }, [commitPastes]);
+
+  // The bundle's picture sections: the buffer as stored plus every image it
+  // references, inlined as data URLs. An empty buffer exports neither.
+  const exportPictures = useCallback(async () => {
+    const cur = pastesRef.current;
+    if (!pastesHaveContent(cur)) return { extras: {}, note: '' };
+    const ids = referencedPictureIds(cur);
+    let images = {};
+    let note = '';
+    if (ids.length) {
+      try {
+        const res = await exportImages(ids);
+        images = res.images;
+        if (res.missing.length) note = `${plural(res.missing.length, 'referenced image')} not found in this browser — exported without ${res.missing.length === 1 ? 'it' : 'them'}.`;
+      } catch (err) {
+        note = `Images not included — ${err.message}`;
+      }
+    }
+    return { extras: { pictures: cur, images }, note };
   }, []);
 
   // Listen for slide / timer state coming back from the display window.
@@ -269,6 +437,7 @@ export default function ControlApp() {
           rounds={rounds}
           tiebreakers={tiebreakers}
           meta={meta}
+          pastes={pastes}
         />
       )}
       {tab === 'questions' && (
@@ -284,8 +453,8 @@ export default function ControlApp() {
           reset={resetQuestions}
           importNote={importNote}
           setImportNote={setImportNote}
-          pastes={pastes}
-          commitPastes={commitPastes}
+          importPictures={importPictures}
+          exportPictures={exportPictures}
           draftMeta={draftMeta}
           setDraftMeta={setDraftMeta}
           setMetaDirty={setMetaDirty}
@@ -305,11 +474,25 @@ export default function ControlApp() {
       {tab === 'pictures' && pictureRoundEnabled && (
         <PicturesPanel
           pastes={pastes}
-          commitPastes={commitPastes}
+          updatePastes={updatePastes}
           meta={meta}
           rounds={rounds}
+          imagesAvailable={imagesAvailable}
+          pictureNote={pictureNote}
         />
       )}
+      {/* Utilities stays mounted (hidden when not active) so a half-built
+          face mash survives tab switches. */}
+      <div style={{ display: tab === 'utilities' ? 'block' : 'none' }}>
+        <UtilitiesPanel
+          visible={tab === 'utilities'}
+          pastes={pastes}
+          livePastesRef={pastesRef}
+          updatePastes={updatePastes}
+          imagesAvailable={imagesAvailable}
+          goToPictures={() => setTab(pictureRoundEnabled ? 'pictures' : 'setup')}
+        />
+      </div>
     </div>
   );
 }
@@ -323,6 +506,7 @@ function Header({ tab, setTab, currentSlide, pictureRoundEnabled = true, questio
     { id: 'questions', label: 'Questions', dirty: questionsDirty },
     { id: 'setup', label: 'Show Setup', dirty: metaDirty },
     { id: 'pictures', label: 'Picture Round', disabled: !pictureRoundEnabled },
+    { id: 'utilities', label: 'Utilities' },
   ];
   return (
     <header style={{
@@ -408,8 +592,8 @@ function Header({ tab, setTab, currentSlide, pictureRoundEnabled = true, questio
 // ============================================================
 // PRESENTER PANEL — nav + timer + slide list
 // ============================================================
-function PresenterPanel({ currentSlide, timer, rounds, tiebreakers, meta }) {
-  const slideList = useMemo(() => buildSlideOutline(rounds, tiebreakers, meta), [rounds, tiebreakers, meta]);
+function PresenterPanel({ currentSlide, timer, rounds, tiebreakers, meta, pastes }) {
+  const slideList = useMemo(() => buildSlideOutline(rounds, tiebreakers, meta, pastes), [rounds, tiebreakers, meta, pastes]);
   const narrow = useNarrowLayout();
 
   return (
@@ -636,7 +820,7 @@ function SlideList({ slideList, currentIndex, narrow }) {
 function QuestionsPanel({
   draft, setDraft, draftTiebreakers, setDraftTiebreakers, setDirty, dirty,
   save, revert, reset, importNote, setImportNote,
-  pastes, commitPastes, draftMeta, setDraftMeta, setMetaDirty,
+  importPictures, exportPictures, draftMeta, setDraftMeta, setMetaDirty,
 }) {
   const [csvImport, setCsvImport] = useState(null);
   const fileInputRef = useRef(null);
@@ -721,18 +905,6 @@ function QuestionsPanel({
     setDraft((d) => renumberRounds(d.filter((_, i) => i !== ri)));
   };
 
-  const downloadFile = (filename, contents, mime) => {
-    const blob = new Blob([contents], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  };
-
   // Two export flavors sharing the same v2 bundle format (meta is optional,
   // detected by presence on import):
   //
@@ -743,22 +915,33 @@ function QuestionsPanel({
   //   machines; import it on the venue machine to restore everything.
   //
   // An empty paste buffer exports NO pictures section at all (rather than ten
-  // null cells); when at least one image exists the full 10-slot array ships,
-  // since the null entries are positional — they keep images in the right cells.
+  // null cells); when any slot has content the full 10-slot array ships,
+  // since the empty entries are positional — they keep pictures in the right
+  // cells — along with an `images` section holding every referenced picture
+  // and answer image as a data URL (exportPictures in ControlApp).
+  const [exporting, setExporting] = useState(false);
   const exportDate = () => new Date().toISOString().slice(0, 10);
-  const onExportQuestions = () => {
-    const hasPictures = pastes.some((p) => p.dataUrl);
-    const payload = buildQuestionsExport(draft, draftTiebreakers,
-      hasPictures ? { pictures: pastes } : {});
-    downloadFile(`trivia-questions-${exportDate()}.json`, JSON.stringify(payload, null, 2), 'application/json');
+  const onExportQuestions = async () => {
+    setExporting(true);
+    try {
+      const { extras, note } = await exportPictures();
+      const payload = buildQuestionsExport(draft, draftTiebreakers, extras);
+      downloadFile(`trivia-questions-${exportDate()}.json`, JSON.stringify(payload, null, 2), 'application/json');
+      if (note) setImportNote(note);
+    } finally {
+      setExporting(false);
+    }
   };
-  const onExportBundle = () => {
-    const hasPictures = pastes.some((p) => p.dataUrl);
-    const payload = buildQuestionsExport(draft, draftTiebreakers, {
-      ...(hasPictures ? { pictures: pastes } : {}),
-      meta: draftMeta,
-    });
-    downloadFile(`trivia-show-${exportDate()}.json`, JSON.stringify(payload, null, 2), 'application/json');
+  const onExportBundle = async () => {
+    setExporting(true);
+    try {
+      const { extras, note } = await exportPictures();
+      const payload = buildQuestionsExport(draft, draftTiebreakers, { ...extras, meta: draftMeta });
+      downloadFile(`trivia-show-${exportDate()}.json`, JSON.stringify(payload, null, 2), 'application/json');
+      if (note) setImportNote(note);
+    } finally {
+      setExporting(false);
+    }
   };
 
   const onDownloadTemplate = () => {
@@ -770,7 +953,7 @@ function QuestionsPanel({
   // The one place an import lands, whatever the source. Today that's only the
   // file picker; a pasted payload or a URL param would call straight into this
   // rather than reimplementing the per-kind branching and drifting from it.
-  const applyImport = (text, filename) => {
+  const applyImport = async (text, filename) => {
     try {
       const result = parseImport(text, filename);
       if (result.kind === 'json') {
@@ -789,14 +972,13 @@ function QuestionsPanel({
           setMetaDirty(true);
         }
         // Pictures have no draft stage — the Picture Round panel always
-        // commits live — so a bundle's pictures land immediately while the
-        // question/meta edits above wait for Save & Push.
+        // commits live — so a bundle's pictures (and their images) land
+        // immediately while the question/meta edits above wait for Save &
+        // Push. v1/v2 data-URL pictures migrate into image storage after.
         const notes = [];
         if (result.pictures) {
-          const restored = normalizePastes(result.pictures);
-          const saved = commitPastes(restored);
-          const count = restored.filter((p) => p.dataUrl).length;
-          notes.push(`${count} picture${count === 1 ? '' : 's'} restored${saved ? '' : ' (storage full: pictures won’t survive a reload)'}`);
+          setImportNote('Restoring pictures…');
+          notes.push(await importPictures(result.pictures, result.images));
         }
         notes.push('review, then Save & Push');
         if (result.meta) notes.push('show settings staged in Show Setup — save there to push');
@@ -853,8 +1035,8 @@ function QuestionsPanel({
         <Button onClick={revert} disabled={!dirty}>Revert</Button>
         <Button onClick={reset} secondary>Reset Questions</Button>
         <span style={{ width: 1, height: 24, background: COLORS.border, margin: '0 4px' }} />
-        <Button onClick={onExportQuestions}>Export Questions</Button>
-        <Button onClick={onExportBundle}>Export Show Bundle</Button>
+        <Button onClick={onExportQuestions} disabled={exporting}>Export Questions</Button>
+        <Button onClick={onExportBundle} disabled={exporting}>Export Show Bundle</Button>
         <Button onClick={onImportClick}>Import…</Button>
         <Button onClick={onDownloadTemplate} secondary>CSV Template</Button>
         {SHEET_TEMPLATE_URL && (
@@ -1006,7 +1188,7 @@ function ShowSetupPanel({ draftMeta, setDraftMeta, setDirty, dirty, save, revert
           onChange={(v) => updateMeta('show', 'costumeContest', v)}
         />
         <Toggle
-          label="Picture round (R1 opener + instructions + intermission + recap)"
+          label="Picture round (R1 opener + instructions + intermission + answer walkthrough)"
           value={draftMeta.show.pictureRound}
           onChange={(v) => updateMeta('show', 'pictureRound', v)}
         />
@@ -1346,15 +1528,17 @@ function CsvImportModal({ csvImport, rounds, roundLabel = (r) => `Round ${r.n}`,
 // ============================================================
 // PICTURES PANEL — paste images, preview, export to clipboard / disk
 // ============================================================
-function PicturesPanel({ pastes, commitPastes, meta, rounds = [] }) {
+function PicturesPanel({ pastes, updatePastes, meta, rounds = [], imagesAvailable, pictureNote = '' }) {
   const [focusedCell, setFocusedCell] = useState(null);
   const [status, setStatus] = useState('');
   const items = useMemo(() => mergeItems(pastes), [pastes]);
+  const narrow = useNarrowLayout();
   // Cell fit/aspect come from the saved meta (like the instruction), so the
   // editor preview + exported handout match the display's last-saved settings.
   const fit = meta.pictureRound?.fit ?? 'cover';
   const aspect = meta.pictureRound?.aspect ?? '316 / 220';
   const handoutOpts = { fit, aspect };
+  const storeOk = imagesAvailable !== false;
 
   const setStatusFlash = useCallback((msg) => {
     setStatus(msg);
@@ -1362,36 +1546,76 @@ function PicturesPanel({ pastes, commitPastes, meta, rounds = [] }) {
   }, []);
 
   // Commit + surface a persistence failure. The display still shows the
-  // image this session (commitPastes broadcasts before saving); the warning
+  // change this session (commitPastes broadcasts before saving); the warning
   // is about the buffer not surviving a reload.
-  const commitChecked = useCallback((next, okMsg) => {
-    const saved = commitPastes(next);
+  const commitChecked = useCallback((fn, okMsg) => {
+    const saved = updatePastes(fn);
     setStatusFlash(saved ? okMsg : `${okMsg} — but storage is full, so it won’t survive a reload. Clear unused cells.`);
-  }, [commitPastes, setStatusFlash]);
+  }, [updatePastes, setStatusFlash]);
 
-  // ingestImage downscales + re-encodes so ten photos fit the localStorage
-  // quota; crop position resets so old framing doesn't carry over.
+  const setSlot = useCallback((i, fields) => (cur) =>
+    cur.map((p, idx) => (idx === i ? { ...p, ...fields } : p)), []);
+
+  // Slot picture: downscaled + re-encoded into the image store (the slot
+  // keeps only the id). Without IndexedDB, falls back to the old behaviour —
+  // a downscaled data URL in the localStorage buffer. Crop position resets
+  // so old framing doesn't carry over.
   const loadIntoCell = useCallback(async (i, blob, verb) => {
+    const label = `${verb} cell ${String(i + 1).padStart(2, '0')}`;
+    if (storeOk) {
+      const id = newImageId();
+      const release = holdMedia([id]);
+      try {
+        await addImage(blob, { kind: 'picture', id });
+        commitChecked(setSlot(i, { imageId: id, dataUrl: null, position: { x: 50, y: 50 } }), label);
+        return;
+      } catch (e) {
+        if (!(e instanceof ImageStoreUnavailableError)) {
+          setStatusFlash(`Image failed to load: ${e.message}`);
+          return;
+        }
+        // Store went away mid-session: degrade to a data URL below.
+      } finally {
+        release();
+      }
+    }
     try {
       const dataUrl = await ingestImage(blob);
-      const next = pastes.map((p, idx) =>
-        idx === i ? { ...p, dataUrl, position: { x: 50, y: 50 } } : p
-      );
-      commitChecked(next, `${verb} cell ${String(i + 1).padStart(2, '0')}`);
+      commitChecked(setSlot(i, { imageId: null, dataUrl, position: { x: 50, y: 50 } }), label);
     } catch (e) {
       setStatusFlash(`Image failed to load: ${e.message}`);
     }
-  }, [pastes, commitChecked, setStatusFlash]);
+  }, [storeOk, commitChecked, setSlot, setStatusFlash]);
+
+  // Answer image A/B — image store only (no data-URL fallback for answers).
+  const loadAnswerImage = useCallback(async (i, which, blob) => {
+    if (!blob || !/^image\//.test(blob.type || '')) return;
+    if (!storeOk) { setStatusFlash('Answer images need image storage, which this browser has turned off.'); return; }
+    const id = newImageId();
+    const release = holdMedia([id]);
+    try {
+      await addImage(blob, { kind: 'answer', id });
+      commitChecked(setSlot(i, { [`answerImage${which}Id`]: id }),
+        `Answer image ${which} set for picture ${String(i + 1).padStart(2, '0')}`);
+    } catch (e) {
+      setStatusFlash(`Answer image failed: ${e.message}`);
+    } finally {
+      release();
+    }
+  }, [storeOk, commitChecked, setSlot, setStatusFlash]);
+
+  const imageFromClipboard = (e) => {
+    for (const item of e.clipboardData?.items || []) {
+      if (item.type.startsWith('image/')) return item.getAsFile();
+    }
+    return null;
+  };
 
   const handlePaste = useCallback((i, e) => {
-    const clipItems = e.clipboardData?.items || [];
-    for (const item of clipItems) {
-      if (item.type.startsWith('image/')) {
-        e.preventDefault();
-        loadIntoCell(i, item.getAsFile(), 'Pasted into');
-        return;
-      }
-    }
+    const file = imageFromClipboard(e);
+    if (!file) return;
+    e.preventDefault();
+    loadIntoCell(i, file, 'Pasted into');
   }, [loadIntoCell]);
 
   const handleDrop = useCallback((i, e) => {
@@ -1402,24 +1626,27 @@ function PicturesPanel({ pastes, commitPastes, meta, rounds = [] }) {
   }, [loadIntoCell]);
 
   const setCellPosition = useCallback((i, position) => {
-    const next = pastes.map((p, idx) =>
-      idx === i ? { ...p, position } : p
-    );
-    commitPastes(next);
-  }, [pastes, commitPastes]);
+    updatePastes(setSlot(i, { position }));
+  }, [updatePastes, setSlot]);
 
+  // Text fields (answer caption, labels) commit on blur / Enter.
+  const setAnswerText = useCallback((i, field, value) => {
+    updatePastes(setSlot(i, { [field]: value.trim() ? value : null }));
+  }, [updatePastes, setSlot]);
+
+  // × on a cell clears the whole slot — picture, answer text, answer images.
   const clearCell = (i) => {
-    const next = pastes.map((p, idx) =>
-      idx === i ? { dataUrl: null, caption: null, position: { x: 50, y: 50 } } : p
-    );
-    commitPastes(next);
+    const p = pastes[i];
+    const hasAnswers = p.caption || p.answerImageAId || p.answerImageBId || p.answerLabelA || p.answerLabelB;
+    if (hasAnswers && !confirm(`Clear picture ${String(i + 1).padStart(2, '0')} and its answer (text + answer images)?`)) return;
+    updatePastes(setSlot(i, emptyPaste()));
   };
 
   const clearAll = () => {
-    if (!confirm('Clear all pasted pictures? This will reset every cell.')) return;
+    if (!confirm('Clear all pictures and answers? This will reset every cell.')) return;
     clearPastes();
-    commitPastes(loadPastes());
-    setStatusFlash('All pastes cleared');
+    updatePastes(() => loadPastes());
+    setStatusFlash('All pictures cleared');
   };
 
   const onCopy = async () => {
@@ -1442,9 +1669,21 @@ function PicturesPanel({ pastes, commitPastes, meta, rounds = [] }) {
 
   const onDownloadAnswers = async () => {
     try {
-      // One sheet covers every round: line count follows the longest round.
+      // One sheet covers every trivia round: line count follows the longest round.
       await downloadAnswersHandoutPng(Math.max(10, ...rounds.map((r) => r.questions.length)));
       setStatusFlash('Answers handout downloaded — photocopy one per team per round');
+    } catch (e) {
+      setStatusFlash(`Download failed: ${e.message}`);
+    }
+  };
+
+  // Picture-round answer sheet (the on-screen Picture Show's sheet): one line
+  // per slot, two for a face-mash slot (03A / 03B).
+  const mashCount = pastes.filter(isFaceMashSlot).length;
+  const onDownloadPictureAnswers = async () => {
+    try {
+      await downloadAnswersHandoutPng(pictureAnswerLines(pastes), 'picture-answers-sheet.png', { title: 'PICTURE ROUND' });
+      setStatusFlash('Picture answer sheet downloaded');
     } catch (e) {
       setStatusFlash(`Download failed: ${e.message}`);
     }
@@ -1456,35 +1695,55 @@ function PicturesPanel({ pastes, commitPastes, meta, rounds = [] }) {
         <div style={{ fontSize: 12, color: COLORS.textDim, marginBottom: 14 }}>
           Click a cell to focus it, then ⌘V (Mac) / Ctrl+V to paste an image. Or drag-drop a file.
           Once an image is in a cell, <strong>drag the image</strong> to crop / re-frame it; the ↺ button resets the crop.
-          Images are stored in this browser; <strong>Export Show Bundle</strong> (Questions tab) bundles them
-          with the questions into one file you can import on another machine.
+          Under each cell, the <strong>Answer</strong> section holds what the answer walkthrough reveals after the
+          intermission: the answer text plus up to two answer images with labels (a face mash uses both — build
+          one in <strong>Utilities</strong>). Images are stored in this browser; <strong>Export Show Bundle</strong>{' '}
+          (Questions tab) bundles them with the questions into one file you can import on another machine.
         </div>
+        {imagesAvailable === false && (
+          <div style={{ fontSize: 12, color: COLORS.warn, marginBottom: 12 }}>
+            Image storage (IndexedDB) is unavailable in this browser — private browsing or blocked site data are the usual
+            causes. Pictures are kept in localStorage as before (about ten fit), and answer images are turned off.
+          </div>
+        )}
+        {pictureNote && (
+          <div style={{ fontSize: 12, color: COLORS.warn, marginBottom: 12 }}>{pictureNote}</div>
+        )}
         <div style={{
-          display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 12,
-          aspectRatio: `${1920 - 160} / ${1080 - 300}`,
+          display: 'grid', gridTemplateColumns: `repeat(${narrow ? 2 : 5}, minmax(0, 1fr))`, gap: 12,
         }}>
           {pastes.map((p, i) => (
-            <PictureCell
-              key={i}
-              i={i}
-              dataUrl={p.dataUrl}
-              fallbackSrc={items[i].src}
-              isPasted={items[i].isPasted}
-              position={items[i].position}
-              focused={focusedCell === i}
-              fit={fit}
-              aspect={aspect}
-              onFocus={() => setFocusedCell(i)}
-              onPaste={(e) => handlePaste(i, e)}
-              onDrop={(e) => handleDrop(i, e)}
-              onClear={() => clearCell(i)}
-              onPositionChange={(pos) => setCellPosition(i, pos)}
-            />
+            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
+              <PictureCell
+                i={i}
+                item={items[i]}
+                focused={focusedCell === i}
+                fit={fit}
+                aspect={aspect}
+                onFocus={() => setFocusedCell(i)}
+                onPaste={(e) => handlePaste(i, e)}
+                onDrop={(e) => handleDrop(i, e)}
+                onClear={() => clearCell(i)}
+                canClear={slotHasContent(p)}
+                onPositionChange={(pos) => setCellPosition(i, pos)}
+              />
+              <AnswerEditor
+                paste={p}
+                storeOk={storeOk}
+                onText={(field, v) => setAnswerText(i, field, v)}
+                onImage={(which, blob) => loadAnswerImage(i, which, blob)}
+                onClearImage={(which) => updatePastes(setSlot(i, { [`answerImage${which}Id`]: null }))}
+                imageFromClipboard={imageFromClipboard}
+              />
+            </div>
           ))}
         </div>
         <div style={{ marginTop: 16, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <Button onClick={onCopy} primary>Copy Handout to Clipboard</Button>
           <Button onClick={onDownload}>Download Handout PNG</Button>
+          <Button onClick={onDownloadPictureAnswers}>
+            Download Picture Answer Sheet{mashCount ? ` (${mashCount} face mash${mashCount === 1 ? '' : 'es'})` : ''}
+          </Button>
           <Button onClick={onDownloadAnswers}>Download Answers Handout</Button>
           <Button onClick={clearAll} secondary>Clear All</Button>
           {status && (
@@ -1498,17 +1757,169 @@ function PicturesPanel({ pastes, commitPastes, meta, rounds = [] }) {
   );
 }
 
+// A text input that keeps local edits and commits once — on blur or Enter —
+// so typing doesn't persist + broadcast the whole buffer per keystroke.
+function CommitInput({ value, onCommit, placeholder, small = false }) {
+  const [local, setLocal] = useState(value || '');
+  const focusedRef = useRef(false);
+  useEffect(() => { if (!focusedRef.current) setLocal(value || ''); }, [value]);
+  const commit = () => { if ((local || '') !== (value || '')) onCommit(local); };
+  return (
+    <input
+      value={local}
+      placeholder={placeholder}
+      onFocus={() => { focusedRef.current = true; }}
+      onBlur={() => { focusedRef.current = false; commit(); }}
+      onChange={(e) => setLocal(e.target.value)}
+      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+      style={{
+        width: '100%', minWidth: 0, boxSizing: 'border-box', padding: small ? '4px 6px' : '6px 8px',
+        background: COLORS.bg, color: COLORS.text,
+        border: `1px solid ${COLORS.border}`, borderRadius: 5,
+        fontFamily: 'inherit', fontSize: small ? 11 : 12,
+      }}
+    />
+  );
+}
+
+// The per-cell "Answer" section: answer text (the slot caption) plus answer
+// images A and B with optional labels. With both labels set and no typed
+// text, the reveal shows "A · B" — the placeholder previews that.
+function AnswerEditor({ paste, storeOk, onText, onImage, onClearImage, imageFromClipboard }) {
+  const derived = answerTextFor({ ...paste, caption: null });
+  return (
+    <div style={{
+      padding: 8, borderRadius: 6, border: `1px solid ${COLORS.border}`, background: COLORS.panelAlt,
+      display: 'flex', flexDirection: 'column', gap: 6,
+    }}>
+      <div style={{ fontSize: 10, letterSpacing: '0.2em', textTransform: 'uppercase', color: COLORS.textDim }}>
+        Answer{isFaceMashSlot(paste) ? ' · face mash (2 lines)' : ''}
+      </div>
+      <CommitInput
+        value={paste.caption}
+        placeholder={derived ? `${derived} (from labels)` : 'Answer text'}
+        onCommit={(v) => onText('caption', v)}
+      />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+        {['A', 'B'].map((which) => (
+          <div key={which} style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+            <AnswerImageSlot
+              which={which}
+              id={paste[`answerImage${which}Id`]}
+              disabled={!storeOk}
+              onFile={(blob) => onImage(which, blob)}
+              onClear={() => onClearImage(which)}
+              imageFromClipboard={imageFromClipboard}
+            />
+            <CommitInput
+              small
+              value={paste[`answerLabel${which}`]}
+              placeholder={`Label ${which}`}
+              onCommit={(v) => onText(`answerLabel${which}`, v)}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// One answer-image well: focus + paste, drop, or click to pick a file.
+// Shows the stored image (or a placeholder when it's missing).
+function AnswerImageSlot({ which, id, disabled, onFile, onClear, imageFromClipboard }) {
+  const inputRef = useRef(null);
+  const [over, setOver] = useState(false);
+  const { url, status } = useImageUrl(id || null);
+  const pick = () => { if (!disabled) inputRef.current?.click(); };
+  return (
+    <div
+      tabIndex={disabled ? -1 : 0}
+      role="button"
+      title={disabled ? 'Answer images need image storage (unavailable in this browser)' : `Answer image ${which} — click to choose, or focus and paste, or drop a file`}
+      onClick={pick}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } }}
+      onPaste={(e) => {
+        if (disabled) return;
+        const file = imageFromClipboard(e);
+        if (file) { e.preventDefault(); onFile(file); }
+      }}
+      onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        if (!disabled) onFile(e.dataTransfer?.files?.[0]);
+      }}
+      style={{
+        position: 'relative', aspectRatio: '1 / 1', borderRadius: 5, overflow: 'hidden',
+        border: `1px ${id ? 'solid' : 'dashed'} ${over ? COLORS.accent : COLORS.border}`,
+        background: COLORS.bg, cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.45 : 1, outline: 'none',
+      }}
+    >
+      {id && status === 'ready' && url ? (
+        <img src={url} alt={`Answer ${which}`} draggable={false}
+          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', pointerEvents: 'none' }} />
+      ) : (
+        <div style={{
+          position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          textAlign: 'center', fontSize: 9, letterSpacing: '0.14em', textTransform: 'uppercase',
+          color: id && status !== 'loading' ? COLORS.warn : COLORS.textDim, padding: 4,
+        }}>
+          {id ? (status === 'loading' ? '…' : 'Missing') : `+ Image ${which}`}
+        </div>
+      )}
+      <div style={{
+        position: 'absolute', top: 3, left: 3, padding: '0 5px', borderRadius: 3,
+        background: COLORS.panelAlt, color: COLORS.text, fontSize: 10, fontWeight: 700, pointerEvents: 'none',
+      }}>{which}</div>
+      {id && (
+        <button
+          type="button"
+          title={`Clear answer image ${which}`}
+          onClick={(e) => { e.stopPropagation(); onClear(); }}
+          style={{
+            position: 'absolute', top: 3, right: 3, width: 18, height: 18,
+            border: 0, borderRadius: 3, background: COLORS.danger, color: '#fff',
+            fontSize: 12, lineHeight: '16px', cursor: 'pointer', padding: 0,
+          }}
+        >×</button>
+      )}
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onClick={(e) => e.stopPropagation()}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          if (file) onFile(file);
+        }}
+      />
+    </div>
+  );
+}
+
 function PictureCell({
-  i, dataUrl, fallbackSrc, isPasted, position, focused, fit = 'cover', aspect = '316 / 220',
+  i, item, focused, fit = 'cover', aspect = '316 / 220', canClear = false,
   onFocus, onPaste, onDrop, onClear, onPositionChange,
 }) {
   const ref = useRef(null);
   const [diskFailed, setDiskFailed] = useState(false);
   const [dragging, setDragging] = useState(false);
-  // Live crop position while dragging — local-only so the (expensive)
-  // persist + broadcast happens once on pointer-up, not per mouse move.
+  // Live crop position while dragging — local-only so the persist +
+  // broadcast happens once on pointer-up, not per mouse move.
   const [livePos, setLivePos] = useState(null);
-  const showSrc = dataUrl || (!diskFailed ? fallbackSrc : null);
+  const position = item.position;
+  // Stored picture → object URL from the image store; legacy/degraded →
+  // inline data URL; empty slot → the disk fallback (if it loads).
+  const { url: storedUrl, status: storedStatus } = useImageUrl(item.imageId || null);
+  const isPasted = item.isPasted;
+  const storedMissing = !!item.imageId && (storedStatus === 'missing' || storedStatus === 'unavailable');
+  const showSrc = item.imageId
+    ? (storedStatus === 'ready' ? storedUrl : null)
+    : (item.dataUrl || (!diskFailed ? item.fallbackSrc : null));
   // Cropping only makes sense in "cover"; "contain" letterboxes the whole
   // image, so panning + the reset button are disabled there.
   const canPan = fit === 'cover';
@@ -1583,10 +1994,10 @@ function PictureCell({
       ) : (
         <div style={{
           position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
-          justifyContent: 'center', color: COLORS.textDim, fontSize: 11,
-          letterSpacing: '0.2em', textTransform: 'uppercase',
+          justifyContent: 'center', color: storedMissing ? COLORS.warn : COLORS.textDim, fontSize: 11,
+          letterSpacing: '0.2em', textTransform: 'uppercase', textAlign: 'center', padding: 8,
         }}>
-          {focused ? 'Paste image' : 'Empty'}
+          {storedMissing ? 'Image missing — paste again' : item.imageId ? '…' : focused ? 'Paste image' : 'Empty'}
         </div>
       )}
       <div style={{
@@ -1614,10 +2025,10 @@ function PictureCell({
           }}
         >↺</button>
       )}
-      {dataUrl && (
+      {canClear && (
         <button
           type="button"
-          title="Clear cell"
+          title="Clear cell (picture + answer)"
           onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => { e.stopPropagation(); onClear(); }}
           style={{
@@ -1633,7 +2044,7 @@ function PictureCell({
           letterSpacing: '0.18em', textTransform: 'uppercase', color: COLORS.warn,
           textShadow: '0 1px 2px rgba(0,0,0,0.6)', pointerEvents: 'none',
         }}>
-          Pasted
+          {item.dataUrl ? 'Pasted · local' : 'Pasted'}
         </div>
       )}
     </div>
@@ -1642,6 +2053,502 @@ function PictureCell({
 
 function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
+}
+
+// ============================================================
+// UTILITIES PANEL — host-side content tools. A picker over a TOOLS registry
+// (structured like barstool-trivia-scaffold's): only the Face Mash Maker is
+// built here. Future tools register with `ready: false` until they exist, so
+// the picker shape doesn't change when they land. ControlApp keeps this
+// panel mounted (hidden) so a half-built mash survives tab switches.
+// ============================================================
+const TOOLS = [
+  { id: 'faceMash', label: 'Face Mash Maker', blurb: 'Blend two faces into one picture-round image, with both originals as the answer.', ready: true },
+];
+
+function UtilitiesPanel({ visible, pastes, livePastesRef, updatePastes, imagesAvailable, goToPictures }) {
+  const [tool, setTool] = useState('faceMash');
+  const narrow = useNarrowLayout();
+  return (
+    <div style={{
+      padding: 16, display: 'grid', gap: 16, alignItems: 'start',
+      gridTemplateColumns: narrow ? '1fr' : '220px minmax(0, 1fr)',
+    }}>
+      <nav style={{ display: 'flex', flexDirection: narrow ? 'row' : 'column', gap: 6, flexWrap: 'wrap' }}>
+        {TOOLS.map((t) => {
+          const active = t.id === tool;
+          return (
+            <button
+              key={t.id}
+              onClick={() => t.ready && setTool(t.id)}
+              disabled={!t.ready}
+              title={t.ready ? t.blurb : `${t.blurb} (coming soon)`}
+              style={{
+                textAlign: 'left', padding: '10px 12px', borderRadius: 8,
+                border: `1px solid ${active ? COLORS.accent : COLORS.border}`,
+                background: active ? COLORS.accentDim : COLORS.panel,
+                color: t.ready ? (active ? COLORS.accent : COLORS.text) : COLORS.textDim,
+                fontFamily: 'inherit', fontSize: 13, fontWeight: 500,
+                cursor: t.ready ? 'pointer' : 'not-allowed', opacity: t.ready ? 1 : 0.6,
+                flex: narrow ? '1 1 160px' : undefined,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <span>{t.label}</span>
+                {!t.ready && (
+                  <span style={{ fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase' }}>Soon</span>
+                )}
+              </div>
+              {!narrow && (
+                <div style={{ marginTop: 4, fontSize: 11, color: COLORS.textDim, fontWeight: 400 }}>{t.blurb}</div>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+      <div style={{ display: tool === 'faceMash' ? 'block' : 'none', minWidth: 0 }}>
+        <FaceMashMaker
+          visible={visible && tool === 'faceMash'}
+          pastes={pastes}
+          livePastesRef={livePastesRef}
+          updatePastes={updatePastes}
+          imagesAvailable={imagesAvailable}
+          goToPictures={goToPictures}
+        />
+      </div>
+    </div>
+  );
+}
+
+
+// Landmark colours on the source photos: eyes in the control accent, mouth
+// in pink so the third point reads as different at a glance.
+const MOUTH_COLOR = '#FF6FA3';
+const EMPTY_PHOTO = { img: null, pts: [], error: '' };
+const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+// The Face Mash Maker (ported from barstool-trivia-scaffold). "Outside head"
+// is photo A (keeps hair, jaw, background) and becomes answer image A /
+// label A on the picture slot; "Inside face" is photo B (eyes, nose, mouth)
+// → answer image B / label B. The answer walkthrough's reveal shows
+// A | mash | B, so the mapping is visible to players too.
+function FaceMashMaker({ visible, pastes, livePastesRef, updatePastes, imagesAvailable, goToPictures }) {
+  const narrow = useNarrowLayout();
+  const [photos, setPhotos] = useState({ outside: EMPTY_PHOTO, inside: EMPTY_PHOTO });
+  const [actors, setActors] = useState({ outside: '', inside: '' });
+  const [ctl, setCtl] = useState(FACE_MASH_CONTROLS);
+  const [outline, setOutline] = useState(false);
+  const [composeError, setComposeError] = useState('');
+  const [slot, setSlot] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState({ text: '', tone: 'info' });
+  const outRef = useRef(null);
+
+  const ready = faceMashReady(photos.outside, photos.inside);
+
+  // Recompose at most once per frame — dragging a landmark re-renders on
+  // every pointermove, and compose walks every pixel of the face box.
+  useEffect(() => {
+    if (!ready || !visible) return undefined;
+    const raf = requestAnimationFrame(() => {
+      if (!outRef.current) return;
+      // compose() reports bad landmarks as a string; anything it still
+      // throws (canvas errors) must surface too — nothing catches inside rAF.
+      try {
+        setComposeError(composeFaceMash(outRef.current, photos.outside, photos.inside, ctl, outline) || '');
+      } catch (err) {
+        setComposeError(`Could not compose the mash — ${err.message || 'canvas error'}.`);
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [ready, visible, photos, ctl, outline]);
+
+  const setPhoto = (key, updater) =>
+    setPhotos((p) => ({ ...p, [key]: typeof updater === 'function' ? updater(p[key]) : updater }));
+
+  const loadFile = async (key, file) => {
+    if (!file) return;
+    if (!/^image\//.test(file.type)) {
+      setPhoto(key, (ph) => ({ ...ph, error: 'That file isn’t an image. Use a JPG, PNG, or WebP.' }));
+      return;
+    }
+    try {
+      const img = await decodeToCanvas(file);
+      setPhoto(key, { img, pts: [], error: '' });
+    } catch {
+      setPhoto(key, (ph) => ({ ...ph, error: 'This image couldn’t be opened. Try saving it as a JPG or PNG first.' }));
+    }
+  };
+
+  const swap = () => {
+    setPhotos((p) => ({ outside: p.inside, inside: p.outside }));
+    setActors((a) => ({ outside: a.inside, inside: a.outside }));
+  };
+
+  // Fresh full-resolution render without the outline, for export/storage.
+  const renderFinal = () => {
+    const c = document.createElement('canvas');
+    const err = composeFaceMash(c, photos.outside, photos.inside, ctl, false);
+    if (err) throw new Error(err);
+    return c;
+  };
+
+  const onDownload = async () => {
+    try {
+      const c = renderFinal();
+      const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+      if (!blob) throw new Error('Could not encode the PNG.');
+      const names = [actors.outside, actors.inside].map(slugify).filter(Boolean);
+      downloadFile(`face-mash${names.length ? `-${names.join('-')}` : ''}.png`, blob, 'image/png');
+      setNote({ text: 'PNG downloaded.', tone: 'info' });
+    } catch (err) {
+      setNote({ text: err.message, tone: 'error' });
+    }
+  };
+
+  // ---- Add to picture round -----------------------------------------------
+  // Pictures have no draft stage in this deck: the write goes through the
+  // same updatePastes path the Picture Round tab uses (persist + broadcast),
+  // so the slot is live on the display as soon as it lands.
+  const canAdd = ready && !composeError && !busy && imagesAvailable !== false;
+
+  const onAdd = async () => {
+    if (!canAdd) return;
+    const n = String(slot + 1).padStart(2, '0');
+    const existing = (livePastesRef.current || [])[slot];
+    if (slotHasContent(existing) && !confirm(`Picture ${n} already has content. Replace its picture, answer images, and answer text with this face mash?`)) return;
+    setBusy(true);
+    setNote({ text: 'Saving images…', tone: 'info' });
+    // Three sequential stores; hold all three ids until the slot write lands,
+    // or a paste commit in between would GC the first image.
+    const imageId = newImageId();
+    const answerImageAId = newImageId();
+    const answerImageBId = newImageId();
+    const release = holdMedia([imageId, answerImageAId, answerImageBId]);
+    try {
+      const mashCanvas = renderFinal();
+      await addImage(mashCanvas, { kind: 'mash', id: imageId });
+      await addImage(photos.outside.img, { kind: 'source', id: answerImageAId });
+      await addImage(photos.inside.img, { kind: 'source', id: answerImageBId });
+      // The caption is cleared: the slot's old answer text described a
+      // different picture. With both labels set, the reveal derives
+      // "A · B" from them; a caption typed later takes over.
+      const saved = updatePastes((cur) => cur.map((p, i) => (i !== slot ? p : {
+        ...p,
+        imageId, dataUrl: null, position: { x: 50, y: 50 }, caption: null,
+        answerImageAId, answerLabelA: actors.outside.trim() || null,
+        answerImageBId, answerLabelB: actors.inside.trim() || null,
+      })));
+      setNote({
+        text: `Added as Picture ${n} — live on the display${saved ? '' : ' (but storage is full, so it won’t survive a reload)'}.`,
+        tone: saved ? 'info' : 'error',
+      });
+    } catch (err) {
+      setNote({ text: `Not added — ${err.message || 'could not store images.'}`, tone: 'error' });
+    } finally {
+      release();
+      setBusy(false);
+    }
+  };
+
+  const selectStyle = {
+    width: '100%', padding: '7px 8px', background: COLORS.bg, color: COLORS.text,
+    border: `1px solid ${COLORS.border}`, borderRadius: 6, fontFamily: 'inherit', fontSize: 13,
+  };
+  const ctlRows = [
+    { id: 'width', label: 'Face area width', min: 60, max: 160, unit: '%' },
+    { id: 'height', label: 'Face area height', min: 60, max: 160, unit: '%',
+      hint: "Taller pulls in more of the inside person's eyebrows, which makes them easier to guess." },
+    { id: 'feather', label: 'Edge softness', min: 5, max: 70, unit: '%' },
+    { id: 'color', label: 'Skin tone match', min: 0, max: 100, unit: '%' },
+    { id: 'bright', label: 'Brightness', min: -40, max: 40, unit: '' },
+    { id: 'opacity', label: 'Face opacity', min: 0, max: 100, unit: '%',
+      hint: 'Drop to about 50% to check that the eyes line up.' },
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+      <div style={{ fontSize: 12, color: COLORS.textDim, maxWidth: '80ch' }}>
+        Drop in two photos, mark both eyes and the mouth on each, and the face gets lined up, feathered, and color-matched onto the other head. Front-facing photos with similar lighting give the cleanest result.
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr' : '1fr 1fr', gap: 16 }}>
+        <MashSourcePanel
+          title="Outside head · Photo A"
+          role="The base photo. Keeps the hair, ears, jaw, and background."
+          photo={photos.outside}
+          visible={visible}
+          onFile={(f) => loadFile('outside', f)}
+          onPoints={(fn) => setPhoto('outside', (ph) => ({ ...ph, pts: fn(ph.pts) }))}
+        />
+        <MashSourcePanel
+          title="Inside face · Photo B"
+          role="Supplies the eyes, nose, and mouth."
+          photo={photos.inside}
+          visible={visible}
+          onFile={(f) => loadFile('inside', f)}
+          onPoints={(fn) => setPhoto('inside', (ph) => ({ ...ph, pts: fn(ph.pts) }))}
+        />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr' : 'minmax(0, 1fr) 340px', gap: 16, alignItems: 'start' }}>
+        <Card title="Result">
+          <div style={{
+            background: COLORS.bg, borderRadius: 8, minHeight: 300, padding: 10,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <canvas
+              ref={outRef}
+              style={{
+                display: ready && !composeError ? 'block' : 'none',
+                maxWidth: '100%', maxHeight: '64vh', width: 'auto', height: 'auto', borderRadius: 4,
+              }}
+            />
+            {(!ready || composeError) && (
+              <div style={{ color: composeError ? COLORS.warn : COLORS.textDim, textAlign: 'center', maxWidth: '36ch', fontSize: 13 }}>
+                {composeError
+                  || (!photos.outside.img || !photos.inside.img
+                    ? 'Add both photos to get started.'
+                    : 'Your mash appears here once both photos have their three points.')}
+              </div>
+            )}
+          </div>
+        </Card>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Card title="Adjust">
+            {ctlRows.map((row) => (
+              <div key={row.id}>
+                <Slider
+                  label={row.label}
+                  value={ctl[row.id]}
+                  min={row.min}
+                  max={row.max}
+                  unit={row.unit}
+                  onChange={(v) => setCtl((c) => ({ ...c, [row.id]: v }))}
+                />
+                {row.hint && <div style={{ fontSize: 11, color: COLORS.textDim, marginTop: 2 }}>{row.hint}</div>}
+              </div>
+            ))}
+            <Toggle label="Show blend area" value={outline} onChange={setOutline} />
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
+              <Button onClick={onDownload} disabled={!ready || !!composeError}>Download PNG</Button>
+              <Button onClick={swap} secondary disabled={!photos.outside.img && !photos.inside.img}>Swap photos</Button>
+              <Button onClick={() => setCtl(FACE_MASH_CONTROLS)} secondary>Reset sliders</Button>
+            </div>
+          </Card>
+
+          <Card title="Add to picture round">
+            <Field label="Actor A" value={actors.outside}
+              onChange={(v) => setActors((a) => ({ ...a, outside: v }))} compact />
+            <Field label="Actor B" value={actors.inside}
+              onChange={(v) => setActors((a) => ({ ...a, inside: v }))} compact />
+            <label style={{ display: 'block', marginTop: 12, fontSize: 12, color: COLORS.textDim }}>
+              Picture slot
+              <select
+                value={slot}
+                onChange={(e) => setSlot(Number(e.target.value))}
+                style={{ ...selectStyle, marginTop: 4 }}
+              >
+                {pastes.map((p, i) => {
+                  const n = String(i + 1).padStart(2, '0');
+                  const status = p.answerLabelA || p.answerLabelB
+                    ? `${p.answerLabelA || '?'} × ${p.answerLabelB || '?'}`
+                    : hasPicture(p) ? 'filled' : slotHasContent(p) ? 'answer only' : 'empty';
+                  return <option key={i} value={i}>Picture {n} · {status}</option>;
+                })}
+              </select>
+            </label>
+            <div style={{ marginTop: 8, fontSize: 11, color: COLORS.textDim }}>
+              The mash becomes the slot&apos;s picture; photo A and photo B become its two answer images, labelled with the actor names (the answer reads &ldquo;A · B&rdquo;).
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
+              <Button onClick={onAdd} primary disabled={!canAdd}>{busy ? 'Adding…' : 'Add to picture round'}</Button>
+              <Button onClick={goToPictures} secondary>Open Picture Round</Button>
+            </div>
+            {imagesAvailable === false && (
+              <div style={{ marginTop: 8, fontSize: 11, color: COLORS.warn }}>
+                Image storage is unavailable in this browser — Download PNG still works, but mashes can&apos;t be added to the picture round here.
+              </div>
+            )}
+            {note.text && (
+              <div style={{ marginTop: 8, fontSize: 12, color: note.tone === 'error' ? COLORS.danger : COLORS.accent }}>
+                {note.text}
+              </div>
+            )}
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// One source photo: drop/pick, then click three landmarks (left eye, right
+// eye, mouth) and drag any of them to fine-tune. Drawn imperatively onto a
+// canvas sized to the stage width; a ResizeObserver repaints when the stage
+// changes size — including when the hidden Utilities tab is shown again.
+function MashSourcePanel({ title, role, photo, visible, onFile, onPoints }) {
+  const stageRef = useRef(null);
+  const canvasRef = useRef(null);
+  const inputRef = useRef(null);
+  const scaleRef = useRef(1);
+  const dragRef = useRef(null);
+  const [over, setOver] = useState(false);
+  const { img, pts } = photo;
+
+  const drawRef = useRef(() => {});
+  drawRef.current = () => {
+    const cv = canvasRef.current, stage = stageRef.current;
+    if (!img || !cv || !stage) return;
+    const availW = stage.clientWidth;
+    if (!availW) return; // hidden tab — the ResizeObserver repaints on show
+    const scale = Math.min(availW / img.width, 360 / img.height);
+    const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    cv.style.width = `${w}px`; cv.style.height = `${h}px`;
+    scaleRef.current = scale;
+    const ctx = cv.getContext('2d');
+    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+    ctx.drawImage(img, 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (pts.length >= 2) {
+      ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(pts[0].x * scale, pts[0].y * scale); ctx.lineTo(pts[1].x * scale, pts[1].y * scale); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    pts.forEach((pt, i) => {
+      const x = pt.x * scale, y = pt.y * scale, col = i === 2 ? MOUTH_COLOR : COLORS.accent;
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.55)';
+      ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI * 2); ctx.stroke();
+      ctx.lineWidth = 2; ctx.strokeStyle = col;
+      ctx.beginPath(); ctx.arc(x, y, 10, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, 1.8, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(x + 14, y - 14, 8, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = COLORS.bg; ctx.font = '700 10px Inter, system-ui, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(i + 1), x + 14, y - 13.5);
+    });
+  };
+
+  useEffect(() => { drawRef.current(); }, [img, pts, visible]);
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(() => drawRef.current());
+    ro.observe(stage);
+    return () => ro.disconnect();
+  }, []);
+
+  const toImg = (e) => {
+    const r = canvasRef.current.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / scaleRef.current, y: (e.clientY - r.top) / scaleRef.current };
+  };
+  const clampPt = (pt) => ({ x: Math.max(0, Math.min(img.width, pt.x)), y: Math.max(0, Math.min(img.height, pt.y)) });
+
+  const onPointerDown = (e) => {
+    const q = toImg(e);
+    let hit = -1, best = 20 / scaleRef.current;
+    pts.forEach((pt, i) => { const d = Math.hypot(pt.x - q.x, pt.y - q.y); if (d < best) { best = d; hit = i; } });
+    if (hit < 0 && pts.length < 3) {
+      hit = pts.length;
+      const added = clampPt(q);
+      onPoints((p) => (p.length < 3 ? [...p, added] : p));
+    }
+    if (hit >= 0) {
+      dragRef.current = hit;
+      e.currentTarget.setPointerCapture(e.pointerId);
+    }
+  };
+  const onPointerMove = (e) => {
+    const idx = dragRef.current;
+    if (idx === null) return;
+    const moved = clampPt(toImg(e));
+    onPoints((p) => p.map((pt, i) => (i === idx ? moved : pt)));
+  };
+  const endDrag = () => { dragRef.current = null; };
+
+  const n = pts.length;
+  const pick = () => inputRef.current?.click();
+
+  return (
+    <Card>
+      <div style={{ fontSize: 14, fontWeight: 600, color: COLORS.text }}>{title}</div>
+      <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: 2 }}>{role}</div>
+      <div
+        ref={stageRef}
+        onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setOver(false);
+          onFile(Array.from(e.dataTransfer?.files || []).find((f) => /^image\//.test(f.type)) || e.dataTransfer?.files?.[0]);
+        }}
+        style={{
+          marginTop: 10, minHeight: 240, borderRadius: 8, overflow: 'hidden',
+          background: COLORS.bg, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          outline: over ? `2px solid ${COLORS.accent}` : 'none', outlineOffset: -2,
+        }}
+      >
+        {img ? (
+          <canvas
+            ref={canvasRef}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+            style={{ display: 'block', touchAction: 'none', cursor: 'crosshair' }}
+          />
+        ) : (
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={pick}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } }}
+            style={{
+              width: '100%', minHeight: 240, cursor: 'pointer', textAlign: 'center',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6,
+              color: COLORS.textDim, fontSize: 13,
+            }}
+          >
+            <strong style={{ color: COLORS.text, fontSize: 14 }}>Drop a photo here</strong>
+            <span>or <u style={{ color: COLORS.accent }}>choose a file</u></span>
+          </div>
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 28, marginTop: 8, fontSize: 13 }}>
+        {photo.error ? (
+          <span style={{ color: COLORS.danger }}>{photo.error}</span>
+        ) : img && (
+          <>
+            <span style={{
+              flex: 'none', width: 22, height: 22, borderRadius: '50%', display: 'grid', placeItems: 'center',
+              fontSize: 11, fontWeight: 700,
+              color: n === 3 ? COLORS.text : COLORS.bg,
+              background: n === 3 ? 'transparent' : (n === 2 ? MOUTH_COLOR : COLORS.accent),
+              border: n === 3 ? `1.5px solid ${COLORS.border}` : 'none',
+            }}>
+              {n === 3 ? '✓' : n + 1}
+            </span>
+            <span>{n < 3 ? LANDMARK_PROMPTS[n] : 'All set. Drag any dot to fine-tune.'}</span>
+          </>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+        <Button onClick={() => onPoints(() => [])} secondary disabled={!img || n === 0}>Redo points</Button>
+        <Button onClick={pick} secondary>{img ? 'Replace photo' : 'Choose photo'}</Button>
+      </div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = '';
+          onFile(file);
+        }}
+      />
+    </Card>
+  );
 }
 
 // ============================================================
@@ -1841,7 +2748,7 @@ function Field({ label, value, onChange, multiline = false, compact = false }) {
 // can show a meaningful slide list and previews without rendering the slides.
 // Keep this in sync with App.jsx's slide composition.
 // ============================================================
-function buildSlideOutline(rounds, tiebreakers = [], meta = DEFAULT_META) {
+function buildSlideOutline(rounds, tiebreakers = [], meta = DEFAULT_META, pastes = []) {
   const titleEdition = meta.title?.edition || DEFAULT_META.title.edition;
   const endLines = `${meta.end?.hero1 || ''} ${meta.end?.hero2 || ''}`.trim();
   const pictureRoundShown = meta.show?.pictureRound ?? true;
@@ -1872,10 +2779,20 @@ function buildSlideOutline(rounds, tiebreakers = [], meta = DEFAULT_META) {
         label: `Picture Show — ${pr.showSeconds ?? DEFAULT_META.pictureRound.showSeconds}s × ${passes} ${passes === 1 ? 'pass' : 'passes'}`,
       });
     }
-    list.push(
-      { key: 'int-r1', label: 'Intermission · Round 1 (collect sheets)' },
-      { key: 'r1-recap', label: 'Picture Round Recap (5×2 grid)' },
-    );
+    list.push({ key: 'int-r1', label: 'Intermission · Round 1 (collect sheets)' });
+    // Mirrors App.jsx's answer walkthrough: two slides per slot that has a
+    // picture (walkthroughSlots), the picture alone then the reveal. The
+    // answer text is host-facing detail here; it never reaches step 1. Labels
+    // say "Still" to match what the display shows.
+    const slots = normalizePastes(pastes);
+    walkthroughSlots(slots).forEach((slot) => {
+      const n = String(slot + 1).padStart(2, '0');
+      const answer = answerTextFor(slots[slot]);
+      list.push(
+        { key: `r1-ans-${slot + 1}-pic`, label: `Still ${n}` },
+        { key: `r1-ans-${slot + 1}-reveal`, label: `Still ${n} · Answer`, detail: answer || '(no answer text)' },
+      );
+    });
   }
   rounds.forEach((r) => {
     const displayN = displayRoundNumber(r.n, pictureRoundShown);

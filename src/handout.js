@@ -4,8 +4,9 @@
 //
 // Drawn directly on a 2D canvas — no html2canvas dependency, no DOM clones.
 
-import { DEFAULT_ASPECT, pictureGridLayout } from './pictures.js';
+import { DEFAULT_ASPECT, pictureGridLayout, isFaceMashSlot } from './pictures.js';
 import { DEFAULT_META } from './meta.js';
+import { getImageUrl } from './imageStore.js';
 
 // Fallback instruction line printed under the handout title. Callers (the
 // control window) pass the per-game value from meta.pictureRound; this keeps
@@ -104,8 +105,19 @@ export async function renderHandoutCanvas(items, instruction = DEFAULT_HANDOUT_I
   const rowH = photoH + PHOTO_GAP + ANSWER_HEIGHT;
   const startX = (W - gridW) / 2;                  // center horizontally (= MARGIN_X for full-width grids)
 
-  // Pre-load every image (parallel)
-  const images = await Promise.all(items.map((it) => loadImage(it.src)));
+  // Pre-load every image (parallel). A stored picture (imageId) resolves to
+  // an object URL from the image store; a missing record or an unavailable
+  // store degrades to the inline data URL / disk fallback, then to "PHOTO".
+  const images = await Promise.all(items.map(async (it) => {
+    if (it.imageId) {
+      try {
+        const url = await getImageUrl(it.imageId);
+        if (url) return loadImage(url);
+      } catch { /* store unavailable — fall through */ }
+      return it.dataUrl ? loadImage(it.dataUrl) : null;
+    }
+    return loadImage(it.src);
+  }));
 
   for (let i = 0; i < items.length; i++) {
     const r = Math.floor(i / COLS);
@@ -175,9 +187,22 @@ export async function renderHandoutCanvas(items, instruction = DEFAULT_HANDOUT_I
     ctx.fillText(String(i + 1).padStart(2, '0'), bx + badgeSize / 2, by + badgeSize / 2 + 1);
 
     // Answer line — sits at the bottom of the answer area; writing goes above it.
+    // A face-mash slot (two people to name) gets two half-width lines, A + B.
     const lineY = y + photoH + PHOTO_GAP + ANSWER_HEIGHT - ANSWER_LINE_THICKNESS;
     ctx.fillStyle = '#100f0e';
-    ctx.fillRect(x, lineY, cellW, ANSWER_LINE_THICKNESS);
+    if (isFaceMashSlot(items[i])) {
+      const half = (cellW - 16) / 2;
+      ctx.font = `700 22px 'Oswald', 'Bebas Neue', Impact, sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ['A', 'B'].forEach((tag, k) => {
+        const hx = x + k * (half + 16);
+        ctx.fillText(tag, hx, lineY - 4);
+        ctx.fillRect(hx, lineY, half, ANSWER_LINE_THICKNESS);
+      });
+    } else {
+      ctx.fillRect(x, lineY, cellW, ANSWER_LINE_THICKNESS);
+    }
   }
 
   return canvas;
@@ -204,11 +229,49 @@ export async function downloadHandoutPng(items, instruction = DEFAULT_HANDOUT_IN
   triggerDownload(blob, filename);
 }
 
-// Generic "numbered answer lines + team / round field" worksheet for
-// non-picture rounds. One PNG, photocopy as many as needed. Line count
-// follows the longest round (minimum 10) so custom-length rounds fit.
-export async function renderAnswersHandoutCanvas(lineCount = 10) {
+// Answer-sheet line geometry. Lines run down from LINES_TOP in one column,
+// the gap shrinking to fit (70px at the default 10 lines). Once the gap
+// would drop below SHEET_MIN_GAP — which keeps the 36px label clear of the
+// next line's write rule (label top + 44px) — the lines split into two
+// columns, then three (a picture round full of face mashes is up to 20
+// lines: 01, 02, 03A, 03B, …). One column holds up to 13 lines.
+const LINES_TOP = 332;
+const LINES_BOTTOM = H - 70 - 44;                // last label's top, max
+const SHEET_MAX_GAP = 70;
+const SHEET_MIN_GAP = 52;
+const SHEET_COLUMN_GAP = 80;
+
+// Pure: lay out `count` lines. Returns { columns, perColumn, gap }.
+export function answerSheetLayout(count) {
+  const n = Math.max(1, count | 0);
+  let columns = 1;
+  let perColumn = n;
+  let gap = Math.min(SHEET_MAX_GAP, Math.floor((LINES_BOTTOM - LINES_TOP) / Math.max(perColumn - 1, 1)));
+  // Add columns (max three) rather than crush the labels together.
+  while (gap < SHEET_MIN_GAP && columns < 3) {
+    columns += 1;
+    perColumn = Math.ceil(n / columns);
+    gap = Math.min(SHEET_MAX_GAP, Math.floor((LINES_BOTTOM - LINES_TOP) / Math.max(perColumn - 1, 1)));
+  }
+  return { columns, perColumn, gap };
+}
+
+// Normalize the `lines` argument: a number → "01".."NN"; an array → its
+// labels as strings (the picture round passes pictureAnswerLines(pastes),
+// e.g. ["01", "02", "03A", "03B", …]).
+function lineLabels(lines) {
+  if (Array.isArray(lines)) return lines.map((l) => String(l));
+  const count = Math.max(1, Number(lines) | 0 || 10);
+  return Array.from({ length: count }, (_, i) => String(i + 1).padStart(2, '0'));
+}
+
+// Generic "numbered answer lines + team / round field" worksheet. One PNG,
+// photocopy as many as needed. `lines` is a count (trivia rounds: the
+// longest round, minimum 10) or an array of labels (the picture round, where
+// a face-mash slot gets two lines, 03A + 03B). `title` defaults to ANSWERS.
+export async function renderAnswersHandoutCanvas(lines = 10, { title = 'ANSWERS' } = {}) {
   await ensureFonts();
+  const labels = lineLabels(lines);
   const canvas = document.createElement('canvas');
   canvas.width = W;
   canvas.height = H;
@@ -223,7 +286,7 @@ export async function renderAnswersHandoutCanvas(lineCount = 10) {
   ctx.font = `700 88px 'Oswald', 'Bebas Neue', Impact, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.fillText('ANSWERS', W / 2, TITLE_Y);
+  ctx.fillText(title, W / 2, TITLE_Y);
 
   // Thin accent rule under the title (mirrors the picture handout).
   const ruleW = 220;
@@ -239,31 +302,32 @@ export async function renderAnswersHandoutCanvas(lineCount = 10) {
   drawTeamField(ctx, MARGIN_X, fieldsY, (W - 2 * MARGIN_X) - roundBlockW - 80);
   drawLabeledLine(ctx, 'ROUND:', W - MARGIN_X - roundBlockW, fieldsY, roundLineW);
 
-  // Numbered answer lines, evenly spaced down the page. The gap shrinks as
-  // the count grows so the last write-line stays inside the bottom margin;
-  // at the default 10 lines this works out to the original 70px gap.
-  const LINES_TOP = 332;
-  const LINE_GAP = Math.min(70, Math.floor((H - 70 - 44 - LINES_TOP) / Math.max(lineCount - 1, 1)));
+  // Labelled answer lines, top-to-bottom then left-to-right. At the default
+  // 10 lines this is the original single column with a 70px gap.
+  const { columns, perColumn, gap } = answerSheetLayout(labels.length);
+  const colW = ((W - 2 * MARGIN_X) - SHEET_COLUMN_GAP * (columns - 1)) / columns;
   ctx.font = `700 36px 'Oswald', 'Bebas Neue', Impact, sans-serif`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
-  for (let i = 0; i < lineCount; i++) {
-    const lineY = LINES_TOP + i * LINE_GAP;
-    const numLabel = `${String(i + 1).padStart(2, '0')}.`;
+  // Align every write rule to the widest label so 03A/03B don't jog the line.
+  const labelW = Math.max(...labels.map((l) => ctx.measureText(`${l}.`).width));
+  labels.forEach((label, i) => {
+    const col = Math.floor(i / perColumn);
+    const row = i % perColumn;
+    const colX = MARGIN_X + col * (colW + SHEET_COLUMN_GAP);
+    const lineY = LINES_TOP + row * gap;
     ctx.fillStyle = '#100f0e';
-    ctx.fillText(numLabel, MARGIN_X, lineY);
-    const numW = ctx.measureText(numLabel).width;
-    const writeStart = MARGIN_X + numW + 24;
-    const writeEnd = W - MARGIN_X;
-    const writeY = lineY + 44;
-    ctx.fillRect(writeStart, writeY, writeEnd - writeStart, ANSWER_LINE_THICKNESS);
-  }
+    ctx.fillText(`${label}.`, colX, lineY);
+    const writeStart = colX + labelW + 24;
+    const writeEnd = colX + colW;
+    ctx.fillRect(writeStart, lineY + 44, writeEnd - writeStart, ANSWER_LINE_THICKNESS);
+  });
 
   return canvas;
 }
 
-export async function downloadAnswersHandoutPng(lineCount = 10, filename = 'answers-handout.png') {
-  const canvas = await renderAnswersHandoutCanvas(lineCount);
+export async function downloadAnswersHandoutPng(lines = 10, filename = 'answers-handout.png', opts = {}) {
+  const canvas = await renderAnswersHandoutCanvas(lines, opts);
   const blob = await canvasToBlob(canvas);
   if (!blob) throw new Error('Failed to create handout blob');
   triggerDownload(blob, filename);
