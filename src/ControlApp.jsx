@@ -6,7 +6,10 @@ import {
   recapSplitsFor, normalizeQuestion, displayRoundNumber,
   renumberRounds, makeBlankRound, deriveKicker, isAutoKicker,
 } from './rounds.js';
-import { loadMeta, saveMeta, resetMeta, sanitizeMeta, DEFAULT_META } from './meta.js';
+import {
+  loadMeta, saveMeta, resetMeta, sanitizeMeta, DEFAULT_META,
+  PICTURE_MODES, PICTURE_MODE_LABELS, SHOW_SECONDS_MIN, SHOW_SECONDS_MAX, SHOW_PASSES_MAX,
+} from './meta.js';
 import {
   loadPastes, savePastes, clearPastes, mergeItems, normalizePastes, ingestImage,
   PICTURE_ASPECTS, resolveAspect,
@@ -478,6 +481,9 @@ function PreviewBlock({ label, slide, accent = false }) {
 }
 
 function TimerCard({ timer }) {
+  // The Picture Show slide reports its own richer state through the same
+  // `timer:state` message (mode 'pictureShow') — swap in its control card.
+  if (timer.mode === 'pictureShow') return <PictureShowCard show={timer} />;
   return (
     <Card title="Timer">
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 16 }}>
@@ -505,6 +511,87 @@ function TimerCard({ timer }) {
         <Button onClick={() => broadcast('timer:adjust', 10)} disabled={!timer.enabled} secondary>
           +10s
         </Button>
+      </div>
+    </Card>
+  );
+}
+
+const SHOW_PHASE_TEXT = {
+  empty: 'No pictures loaded — paste images in the Picture Round tab',
+  ready: 'Ready — waiting for Start',
+  showing: 'Showing',
+  gap: 'Between passes (“Second look”)',
+  done: 'Pencils down — click Next when ready',
+};
+
+// Presenter control for the on-screen Picture Show. Start goes out as
+// `pictureshow:start`; once running the same button toggles pause via
+// `timer:toggle`. Back/Skip are `pictureshow:step` { delta: ∓1 }; ±10 s and
+// Restart reuse `timer:adjust` / `timer:reset`. The deck itself never moves.
+function PictureShowCard({ show }) {
+  const pad = (n) => String(n ?? 0).padStart(2, '0');
+  const running = show.phase === 'showing' || show.phase === 'gap';
+  const canStart = show.phase === 'ready';
+  const big = show.phase === 'showing' || show.phase === 'gap'
+    ? `${show.seconds}s`
+    : show.phase === 'done' ? 'DONE' : show.phase === 'empty' ? '—' : 'READY';
+  const bigColor = running
+    ? (show.paused ? COLORS.warn : (show.seconds <= 5 ? COLORS.danger : COLORS.accent))
+    : COLORS.textDim;
+  return (
+    <Card title="Picture Show">
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, flexWrap: 'wrap' }}>
+        <div style={{
+          fontFamily: "'Oswald', 'Helvetica Neue', Arial, sans-serif", fontSize: 64, fontWeight: 700,
+          color: bigColor, lineHeight: 1,
+        }}>
+          {big}
+        </div>
+        <div style={{ fontSize: 13, color: COLORS.text }}>
+          {show.total > 0 && show.phase !== 'empty' && show.phase !== 'ready' && (
+            <div style={{ fontVariantNumeric: 'tabular-nums' }}>
+              Image {pad(show.image)} · {show.position} of {show.total} · Pass {show.pass} of {show.passes}
+            </div>
+          )}
+          <div style={{ fontSize: 12, color: show.paused ? COLORS.warn : COLORS.textDim, marginTop: 2 }}>
+            {show.phase === 'ready' && show.total > 0 ? `${show.total} images · ` : ''}
+            {show.paused ? 'Paused' : SHOW_PHASE_TEXT[show.phase] || show.phase}
+            {' · '}{show.showSeconds}s per image
+          </div>
+        </div>
+      </div>
+      <div style={{ marginTop: 14, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <Button
+          primary={canStart}
+          onClick={() => broadcast(canStart ? 'pictureshow:start' : 'timer:toggle', null)}
+          disabled={!canStart && !running}
+        >
+          {canStart || show.phase === 'empty' ? 'Start' : (show.paused ? 'Resume' : 'Pause')}
+        </Button>
+        <Button
+          onClick={() => broadcast('pictureshow:step', { delta: -1 })}
+          disabled={show.phase === 'ready' || show.phase === 'empty'}
+        >
+          ← Back
+        </Button>
+        <Button
+          onClick={() => broadcast('pictureshow:step', { delta: 1 })}
+          disabled={!running}
+        >
+          Skip →
+        </Button>
+        <Button onClick={() => broadcast('timer:adjust', -10)} disabled={!running} secondary>−10s</Button>
+        <Button onClick={() => broadcast('timer:adjust', 10)} disabled={!running} secondary>+10s</Button>
+        <Button
+          onClick={() => broadcast('timer:reset', null)}
+          disabled={show.phase === 'ready' || show.phase === 'empty'}
+          secondary
+        >
+          Restart
+        </Button>
+      </div>
+      <div style={{ marginTop: 10, fontSize: 11, color: COLORS.textDim }}>
+        The deck stays on this slide — Back/Skip move between images, not slides. Click Next when you&apos;re done.
       </div>
     </Card>
   );
@@ -1050,23 +1137,100 @@ function ShowSetupPanel({ draftMeta, setDraftMeta, setDirty, dirty, save, revert
           </label>
           <div style={{ marginTop: 16, fontSize: 11, letterSpacing: '0.2em',
             textTransform: 'uppercase', color: COLORS.textDim }}>
-            Opener Slide
+            How it&apos;s played
           </div>
-          <Field label="Title" value={draftMeta.pictureRound.openerTitle} onChange={(v) => updateMeta('pictureRound', 'openerTitle', v)} />
-          <Field label="Subtitle" value={draftMeta.pictureRound.openerSubtitle} onChange={(v) => updateMeta('pictureRound', 'openerSubtitle', v)} multiline />
-          <Field label="Kicker" value={draftMeta.pictureRound.openerKicker} onChange={(v) => updateMeta('pictureRound', 'openerKicker', v)} />
+          <label style={{
+            display: 'grid', gridTemplateColumns: '1fr 220px', gap: 12,
+            alignItems: 'center', marginTop: 10,
+          }}>
+            <span style={{ fontSize: 13 }}>Mode</span>
+            <select
+              value={draftMeta.pictureRound.mode}
+              onChange={(e) => updateMeta('pictureRound', 'mode', e.target.value)}
+              disabled={!draftMeta.show.pictureRound}
+              style={{
+                padding: '6px 8px', background: COLORS.bg, color: COLORS.text,
+                border: `1px solid ${COLORS.border}`, borderRadius: 6,
+                fontFamily: 'inherit', fontSize: 13,
+              }}
+            >
+              {PICTURE_MODES.map((m) => (
+                <option key={m} value={m}>{PICTURE_MODE_LABELS[m]}</option>
+              ))}
+            </select>
+          </label>
+          <div style={{ fontSize: 11, color: COLORS.textDim, marginTop: 4 }}>
+            Paper = handout only (no extra slide). On screen / Both add a timed Picture Show slide after the
+            instructions: the stills play one at a time, and you run it from the Presenter tab.
+          </div>
+          {draftMeta.pictureRound.mode !== 'paper' && (
+            <>
+              <Slider
+                label="Seconds per image"
+                value={draftMeta.pictureRound.showSeconds}
+                min={SHOW_SECONDS_MIN}
+                max={SHOW_SECONDS_MAX}
+                step={5}
+                unit="s"
+                onChange={(v) => updateMeta('pictureRound', 'showSeconds', v)}
+              />
+              <Slider
+                label="Passes (times the whole set plays)"
+                value={draftMeta.pictureRound.showPasses}
+                min={1}
+                max={SHOW_PASSES_MAX}
+                step={1}
+                onChange={(v) => updateMeta('pictureRound', 'showPasses', v)}
+              />
+              <Toggle
+                label="Sound (tick on each image, bell at “Pencils down”)"
+                value={draftMeta.pictureRound.showSound}
+                onChange={(v) => updateMeta('pictureRound', 'showSound', v)}
+              />
+            </>
+          )}
           <div style={{ marginTop: 16, fontSize: 11, letterSpacing: '0.2em',
             textTransform: 'uppercase', color: COLORS.textDim }}>
-            Instruction Steps
+            Opener Slide{draftMeta.pictureRound.mode === 'screen' ? ' (on-screen copy)' : ''}
+          </div>
+          <Field label="Title" value={draftMeta.pictureRound.openerTitle} onChange={(v) => updateMeta('pictureRound', 'openerTitle', v)} />
+          {draftMeta.pictureRound.mode === 'screen' ? (
+            <>
+              <Field label="Subtitle" value={draftMeta.pictureRound.screenOpenerSubtitle} onChange={(v) => updateMeta('pictureRound', 'screenOpenerSubtitle', v)} multiline />
+              <Field label="Kicker" value={draftMeta.pictureRound.screenOpenerKicker} onChange={(v) => updateMeta('pictureRound', 'screenOpenerKicker', v)} />
+            </>
+          ) : (
+            <>
+              <Field label="Subtitle" value={draftMeta.pictureRound.openerSubtitle} onChange={(v) => updateMeta('pictureRound', 'openerSubtitle', v)} multiline />
+              <Field label="Kicker" value={draftMeta.pictureRound.openerKicker} onChange={(v) => updateMeta('pictureRound', 'openerKicker', v)} />
+            </>
+          )}
+          {draftMeta.pictureRound.mode === 'both' && (
+            <Field label="Screen note" value={draftMeta.pictureRound.bothNote} onChange={(v) => updateMeta('pictureRound', 'bothNote', v)} multiline />
+          )}
+          <div style={{ marginTop: 16, fontSize: 11, letterSpacing: '0.2em',
+            textTransform: 'uppercase', color: COLORS.textDim }}>
+            Instruction Steps{draftMeta.pictureRound.mode === 'screen' ? ' (on-screen copy)' : ''}
           </div>
           <div style={{ fontSize: 12, color: COLORS.textDim, marginTop: 6 }}>
-            The four step cards on the instructions slide. <code>{'{nextRound}'}</code> is replaced with the first trivia round&apos;s number.
+            The four step cards on the instructions slide{draftMeta.pictureRound.mode === 'screen'
+              ? ' — the on-screen set; paper/both modes keep their own copy'
+              : ''}. Tokens: <code>{'{nextRound}'}</code> → the first trivia round&apos;s number,{' '}
+            <code>{'{seconds}'}</code> → seconds per image, <code>{'{passes}'}</code> → “once” / “twice” / “three times”.
           </div>
-          <RuleItemsEditor
-            items={draftMeta.pictureRound.steps}
-            onUpdate={(i, f, v) => updateMetaItem('pictureRound', 'steps', i, f, v)}
-            numeralFor={(i) => String(i + 1).padStart(2, '0')}
-          />
+          {draftMeta.pictureRound.mode === 'screen' ? (
+            <RuleItemsEditor
+              items={draftMeta.pictureRound.screenSteps}
+              onUpdate={(i, f, v) => updateMetaItem('pictureRound', 'screenSteps', i, f, v)}
+              numeralFor={(i) => String(i + 1).padStart(2, '0')}
+            />
+          ) : (
+            <RuleItemsEditor
+              items={draftMeta.pictureRound.steps}
+              onUpdate={(i, f, v) => updateMetaItem('pictureRound', 'steps', i, f, v)}
+              numeralFor={(i) => String(i + 1).padStart(2, '0')}
+            />
+          )}
         </div>
       </Card>
 
@@ -1698,6 +1862,17 @@ function buildSlideOutline(rounds, tiebreakers = [], meta = DEFAULT_META) {
     list.push(
       { key: 'r1-open', label: `Round 1 Opener — ${meta.pictureRound?.openerTitle || DEFAULT_META.pictureRound.openerTitle}` },
       { key: 'r1-instr', label: 'Round 1 Instructions' },
+    );
+    // Mirrors App.jsx: the timed on-screen show only exists in screen/both mode.
+    const pr = meta.pictureRound || DEFAULT_META.pictureRound;
+    if (PICTURE_MODES.includes(pr.mode) && pr.mode !== 'paper') {
+      const passes = pr.showPasses ?? DEFAULT_META.pictureRound.showPasses;
+      list.push({
+        key: 'r1-show',
+        label: `Picture Show — ${pr.showSeconds ?? DEFAULT_META.pictureRound.showSeconds}s × ${passes} ${passes === 1 ? 'pass' : 'passes'}`,
+      });
+    }
+    list.push(
       { key: 'int-r1', label: 'Intermission · Round 1 (collect sheets)' },
       { key: 'r1-recap', label: 'Picture Round Recap (5×2 grid)' },
     );
