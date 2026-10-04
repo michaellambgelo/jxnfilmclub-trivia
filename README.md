@@ -35,7 +35,7 @@ A typical event flows through this slide order:
 1. **Title** — venue, edition, hosts, date.
 2. **Rules** — four house rules (no phones, spelling best-attempt, hosts final, have fun).
 3. **Prize** *(optional)*, **Costume Contest** *(optional)* — toggleable from Edit Questions.
-4. **Round 1 (Picture Round)** *(optional)* — opener → instructions → intermission → recap. Always image-based. By default it's played from a paper sheet generated from the Picture Round tab; switch it to **on screen** (or **both**) and a timed **Picture Show** slide plays the stills on the display right after the instructions — see [Running the picture round on screen](#running-the-picture-round-on-screen).
+4. **Round 1 (Picture Round)** *(optional)* — opener → instructions → intermission → answer walkthrough (two slides per still: the still alone, then the reveal with its answer). Always image-based. By default it's played from a paper sheet generated from the Picture Round tab; switch it to **on screen** (or **both**) and a timed **Picture Show** slide plays the stills on the display right after the instructions — see [Running the picture round on screen](#running-the-picture-round-on-screen).
 5. **Rounds 2–5** *(or however many you configure — rounds and questions-per-round are editable)* — each round is opener → questions → intermission → recap. Question slides have a per-question countdown timer in the corner.
 6. **End** — sign-off slide while hosts tally scores.
 7. **Next Event** *(optional)* — announces the next trivia night (date / venue / detail, edited per event).
@@ -45,7 +45,7 @@ Anything from #3 onward (prize / costume / picture round / next event / tiebreak
 
 ## Control mode
 
-Three tabs:
+Five tabs — Presenter, Questions, Show Setup, Picture Round, Utilities. (The Picture Round and Utilities tabs save as you go; the others have Save / Revert.)
 
 ### 1. Presenter tab
 A live outline of every slide in the deck with the active slide highlighted. Click any row to jump the display straight to that slide. The currently-active question slide also surfaces a **timer panel**: Start/Pause, Reset, ±10s — the timer state is broadcast to the display, so the room sees the seconds ticking down on the slide while you control it from your laptop. On the Picture Show slide that panel becomes the **Picture Show** card (see below).
@@ -53,7 +53,7 @@ A live outline of every slide in the deck with the active slide highlighted. Cli
 ### 2. Edit Questions tab
 Cards at the top edit the **Title Slide**, **End Slide**, and **Next Event Slide** strings (eyebrow, hero text, edition, hosts, date, sign-off, next-event details). Below that, cards per round let you edit each question and answer — plus restructure the game: **add/remove questions** within a round (the "N Questions" kicker tracks the count automatically), and **add/remove whole rounds**. Edits are buffered locally — "Save & Push to Display" sends them to the display (and persists to `localStorage`), "Revert" discards.
 
-Bulk editing goes through **Export Deck / Import…**: **Export Deck** is the one export — a JSON file carrying the questions, tiebreakers, picture round (images included), and all game meta, so importing it on another machine restores the whole event. Import also accepts spreadsheet CSVs (`round,round_title,question,answer,subtitle,kicker`, with `TB` rows for tiebreakers) — round count and questions-per-round are detected from the rows — and the older `category,question` writer-template CSV, which opens a category→round mapping dialog.
+Bulk editing goes through **Export / Import…**, and there are two exports: **Export Questions** carries the questions, tiebreakers, and picture round (every still and answer image included) and leaves the other machine's show settings alone — the weekly swap; **Export Show Bundle** adds all the show settings and moves the whole event between machines. Import also accepts spreadsheet CSVs (`round,round_title,question,answer,subtitle,kicker`, with `TB` rows for tiebreakers) — round count and questions-per-round are detected from the rows — and the older `category,question` writer-template CSV, which opens a category→round mapping dialog.
 
 #### Writing questions in a spreadsheet
 
@@ -74,14 +74,27 @@ To build your group's shared template: click **CSV Template**, then in a new She
 The **Slides to Include** card has the toggle switches that hide/show Prize, Costume Contest, Picture Round, Next Event, and Tiebreakers in the deck.
 
 ### 3. Picture Round tab
-The picture round (Round 1) needs ten themed images. The workflow:
+The picture round (Round 1) needs ten stills. Everything on this tab saves and reaches the display the moment you make it — there's no Save button. The workflow:
 
-1. Click a numbered cell, then **⌘V (Mac) / Ctrl+V** to paste an image from your clipboard. Drag-and-drop a file onto the cell also works. Images are automatically downscaled and recompressed on the way in (so a full-resolution phone photo won't blow the browser's storage quota), saved to `localStorage`, and pushed to the display live.
-2. **Crop / re-frame** — once an image is in a cell, drag it to pan the visible crop. The ↺ button next to a cell resets the crop to centered.
-3. **Copy Handout to Clipboard** — copies a 1920×1080 print-friendly PNG (white background, dark borders, "PICTURE ROUND" title) for pasting into Word / Pages / email so the room can play with paper sheets.
-4. **Download Handout PNG** — same image as a file.
+1. Click a numbered cell, then **⌘V (Mac) / Ctrl+V** to paste an image from your clipboard. Drag-and-drop a file onto the cell also works. Images are automatically downscaled and recompressed on the way in and stored in this browser's image storage (IndexedDB), then pushed to the display live.
+2. **Crop / re-frame** — once an image is in a cell, drag it to pan the visible crop. The ↺ button resets the crop to centered; × clears the cell (still and answer).
+3. **Answer** — under each cell. Type the answer text, and optionally add up to two **answer images** (click a box to choose a file, or click it and paste, or drop a file) with a **label** under each. These are what the room sees during the answer walkthrough after the intermission; they never appear while the round is being played. If both labels are filled and the answer text is empty, the answer reads "Label A · Label B" — that's how a face mash names both actors.
+4. **Copy Handout to Clipboard** — copies a 1920×1080 print-friendly PNG (white background, dark borders, "PICTURE ROUND" title) for pasting into Word / Pages / email so the room can play with paper sheets. A face-mash cell gets two short answer lines, A and B.
+5. **Download Handout PNG** — same image as a file.
+6. **Download Picture Answer Sheet** — a numbered answer sheet for the on-screen Picture Show (one line per still; a face mash gets two, e.g. **03A** and **03B**). **Download Answers Handout** is the generic sheet for the trivia rounds.
 
-Pictures travel with the deck: **Export Deck** on the Edit Questions tab bundles them (with the questions and game meta) into one JSON file, and **Import…** on another machine restores them instantly.
+Stills travel with the deck: either export on the Questions tab bundles them (answer images too) into one JSON file, and **Import…** on another machine restores them. Deck files from before answer images still import — their stills are moved into image storage automatically, as are stills saved in this browser by an older version of the deck (open the control window once and it happens on its own).
+
+> If the tab shows an "image storage is unavailable" warning (private browsing, or site data blocked), stills fall back to the old way of being stored (about ten fit) and answer images are turned off. Use a normal browser window for the event.
+
+**After the intermission**, the deck walks through the answers: for each still, one slide with the still alone ("Still 03 · Answer") so the room can take a last look, then the reveal — the two answer images either side of the still (or the one answer image beside it) with their labels, and the answer text big underneath. Click **Next** through them like any other slide. Cells you left empty get no answer slides.
+
+### 4. Utilities tab
+Tools that make picture-round content. Today there's one, the **Face Mash Maker**:
+
+1. Drop a photo into **Outside head · Photo A** (keeps the hair, jaw, and background) and one into **Inside face · Photo B** (supplies eyes, nose, mouth).
+2. On each photo click the left eye, the right eye, then the middle of the mouth. Drag any dot to fine-tune. The mash appears under **Result**; the sliders adjust face size, edge softness, skin-tone match, brightness, and opacity. **Swap photos** flips them; **Download PNG** saves the mash.
+3. Type the two names in **Actor A** / **Actor B**, pick a **Picture slot** (the list shows which slots are filled — you'll be asked before one gets replaced), and click **Add to picture round**. The mash becomes that slot's still, the two original photos become its answer images, and the names become their labels. It's live on the display straight away.
 
 ## Running the picture round on screen
 
@@ -140,11 +153,13 @@ Stack: React 18 + JSX (no TypeScript, by intent) + Vite 5, plus a custom `<deck-
 src/
 ├── main.jsx            entry — picks display vs control by URL hash
 ├── App.jsx             display: slide composition + broadcast wiring
-├── ControlApp.jsx      control: presenter / editor / picture round tabs
+├── ControlApp.jsx      control: presenter / questions / show setup / picture round / utilities tabs
 ├── rounds.js           DEFAULT_ROUNDS + structure helpers + JSON/CSV import-export + persistence
 ├── csv.js              dependency-free CSV parse/serialize
 ├── meta.js             title/end/next-event slide text + slide visibility toggles
-├── pictures.js         picture round data + paste buffer
+├── pictures.js         picture round data + paste buffer (slots reference images by id) + migration helpers
+├── imageStore.js       IndexedDB image store (stills + answer images), useImageUrl, bundle export/import, GC
+├── faceMash.js         Face Mash Maker image math (pure canvas)
 ├── handout.js          canvas-based PNG renderers (picture handout + answer sheets)
 ├── broadcast.js        BroadcastChannel helper + useBroadcast hook
 ├── deck-stage.js       custom element (vanilla JS) — handles 1920×1080 auto-scale
@@ -186,6 +201,8 @@ Palette values track `~/Workspace/jxnfilmclub/css/tokens.css`, the club's design
 Auto-deploys to **Cloudflare Workers** on every push to `main`, via the Workers build integration on the GitHub repo. Cloudflare runs `npm run build` and then `npx wrangler deploy`, which reads `wrangler.jsonc` and uploads `dist/` as Worker static assets.
 
 The base is `/` (set in `vite.config.js`) because the Worker serves at the domain root; image fallbacks in `src/pictures.js` use `import.meta.env.BASE_URL` so they resolve in dev and prod alike. Live at `https://jxnfilmclub-trivia.michaellamb.workers.dev/`.
+
+**Before deploying the image-store version** (stills moved out of `localStorage` into IndexedDB): on the machine you'll host from, open the control window on the *old* build and click **Export Show Bundle** first. The new build migrates saved stills on its own the first time the control window opens, but the migration is one-way — that file is your rollback (re-import it on either build). After a deploy, **reload the display window before the control window**: until the display reloads, an old display paired with a new control shows PHOTO placeholders where the migrated stills should be.
 
 `wrangler.jsonc` is load-bearing: without it `wrangler deploy` falls back to framework auto-detection, which requires Vite >= 6 and fails the deploy step even though the build succeeds.
 
