@@ -199,15 +199,22 @@ export function isAutoKicker(kicker) {
 // ---- Export / import ------------------------------------------------------
 // The whole deck serializes to a single JSON file so a host can back up
 // before clicking Reset, restore after a wipe, or move an event between
-// machines. Version 2 adds the optional deck-bundle sections: `pictures`
-// (the 10-slot picture-round buffer, data URLs included) and `meta` (full
-// game meta). Version 1 files (questions + tiebreakers only) still import.
+// machines. Version 2 added the optional deck-bundle sections: `pictures`
+// (the 10-slot picture-round buffer, data URLs inline) and `meta` (full
+// game meta). Version 3 moves the picture images into the IndexedDB image
+// store: `pictures` slots carry ids (`imageId`, `answerImageAId`,
+// `answerImageBId`) plus answer text/labels, and a new `images` section
+// holds every referenced image as a data URL keyed by id (see
+// imageStore.js exportImages). v1 and v2 files still import — a v2 slot's
+// `dataUrl` goes through the control window's migration into the store. An
+// older build importing a v3 file sees id-only slots and shows placeholders.
 
 export const QUESTIONS_EXPORT_TYPE = 'jxnfilmclub-trivia/questions';
-export const QUESTIONS_EXPORT_VERSION = 2;
+export const QUESTIONS_EXPORT_VERSION = 3;
 
-// `extras` carries the optional bundle sections: pass { pictures, meta } to
-// export a complete deck as one file; omit for a questions-only export.
+// `extras` carries the optional bundle sections: pass { pictures, images,
+// meta } to export a complete deck as one file; omit for a questions-only
+// export. An empty `images` map is dropped.
 export function buildQuestionsExport(rounds, tiebreakers, extras = {}) {
   const payload = {
     type: QUESTIONS_EXPORT_TYPE,
@@ -217,6 +224,7 @@ export function buildQuestionsExport(rounds, tiebreakers, extras = {}) {
     tiebreakers: [...tiebreakers],
   };
   if (extras.pictures) payload.pictures = extras.pictures;
+  if (extras.images && Object.keys(extras.images).length > 0) payload.images = extras.images;
   if (extras.meta) payload.meta = extras.meta;
   return payload;
 }
@@ -270,14 +278,21 @@ export function parseQuestionsImport(text) {
     rounds: clone(data.rounds),
   };
   if (tbGiven) result.tiebreakers = [...data.tiebreakers];
-  // Optional version-2 deck-bundle sections. Passed through loosely here —
-  // the importer runs pictures through normalizePastes and meta through
-  // sanitizeMeta, which coerce shape and drop garbage fields.
+  // Optional deck-bundle sections. Passed through loosely here — the
+  // importer runs pictures through normalizePastes, images through
+  // imageStore.importImages (which skips malformed entries), and meta
+  // through sanitizeMeta, which coerce shape and drop garbage fields.
   if (data.pictures !== undefined) {
     if (!Array.isArray(data.pictures)) {
       throw new Error('"pictures" must be an array when present.');
     }
     result.pictures = data.pictures;
+  }
+  if (data.images !== undefined) {
+    if (!data.images || typeof data.images !== 'object' || Array.isArray(data.images)) {
+      throw new Error('"images" must be an object keyed by image id when present.');
+    }
+    result.images = data.images;
   }
   if (data.meta !== undefined) {
     if (!data.meta || typeof data.meta !== 'object' || Array.isArray(data.meta)) {

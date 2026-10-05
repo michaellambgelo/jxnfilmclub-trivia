@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ACCENTS, TitleSlide, RulesSlide, PrizeSlide, CostumeContestSlide,
-  RoundOpener, PictureRoundInstructions, IntermissionSlide, QuestionSlide,
-  RoundRecap, PictureRoundRecap, TiebreakerIntroSlide, EndSlide, NextEventSlide,
+  RoundOpener, PictureRoundInstructions, PictureShowSlide, IntermissionSlide, QuestionSlide,
+  RoundRecap, PictureAnswerSlide, TiebreakerIntroSlide, EndSlide, NextEventSlide,
   JoinClubSlide,
 } from './slides.jsx';
 import { loadRounds, loadTiebreakers, recapSplitsFor, normalizeQuestion, displayRoundNumber } from './rounds.js';
-import { loadPastes, mergeItems } from './pictures.js';
-import { loadMeta, DEFAULT_META, sanitizeMeta } from './meta.js';
+import { loadPastes, mergeItems, normalizePastes, walkthroughSlots } from './pictures.js';
+import { loadMeta, DEFAULT_META, sanitizeMeta, pictureCopyFor } from './meta.js';
 import { broadcast, useBroadcast } from './broadcast.js';
+import { unlockAudio } from './chime.js';
 
 // ============================================================
 // PER-ROUND ACCENT ROTATION
@@ -51,7 +52,7 @@ function App() {
   useBroadcast(useCallback((msg) => {
     const stage = stageRef.current;
     if (msg.type === 'rounds:update') setRounds(msg.payload);
-    else if (msg.type === 'pictures:update') setPastes(msg.payload);
+    else if (msg.type === 'pictures:update') setPastes(normalizePastes(msg.payload));
     else if (msg.type === 'tiebreakers:update') setTiebreakers(msg.payload);
     else if (msg.type === 'meta:update') {
       // Sanitize broadcast payloads exactly like loadMeta() sanitizes stored
@@ -69,6 +70,23 @@ function App() {
     }
   }, []));
 
+  // Browsers keep audio locked until this window sees a user gesture; the
+  // Picture Show's tick/ding are fired by timers and broadcasts, so unlock
+  // the shared AudioContext on the first click/keypress on the display.
+  useEffect(() => {
+    const handler = () => {
+      unlockAudio();
+      window.removeEventListener('pointerdown', handler);
+      window.removeEventListener('keydown', handler);
+    };
+    window.addEventListener('pointerdown', handler);
+    window.addEventListener('keydown', handler);
+    return () => {
+      window.removeEventListener('pointerdown', handler);
+      window.removeEventListener('keydown', handler);
+    };
+  }, []);
+
   // Forward slide changes to the /control window.
   useEffect(() => {
     const stage = stageRef.current;
@@ -77,9 +95,10 @@ function App() {
       broadcast('slidechange', describeSlide(stage, e.detail.slide, e.detail));
       // Clear timer state when leaving any non-question slide so control's
       // timer card shows OFF instead of stale numbers. Question slides
-      // (regular rounds + tiebreakers) keep the timer; everything else clears.
+      // (regular rounds + tiebreakers) and the Picture Show keep the timer —
+      // each emits its own timer:state on activation; everything else clears.
       const label = e.detail.slide?.getAttribute('data-label') || '';
-      if (!/^(R\d+ Q\d+|TIEBREAKER \d+)/.test(label)) {
+      if (!/^(R\d+ Q\d+|TIEBREAKER \d+|PICTURE SHOW)/.test(label)) {
         broadcast('timer:state', { enabled: false, seconds: 0, paused: false });
       }
     };
@@ -105,16 +124,21 @@ function App() {
     slides.push(<CostumeContestSlide key="costume" tweaks={tweaks} accent={accent} costume={meta.costume.items} />);
   }
 
-  // 5-8. Picture Round (toggleable as a unit: opener + instructions + intermission + recap)
+  // 5-8. Picture Round (toggleable as a unit: opener + instructions
+  // [+ Picture Show] + intermission + answer walkthrough). The opener/instruction copy is
+  // mode-dependent (paper vs screen) — pictureCopyFor picks the set and fills
+  // the {nextRound}/{seconds}/{passes} tokens.
   if (meta.show.pictureRound) {
+    const firstTrivia = rounds[0] ? displayRoundNumber(rounds[0].n, true) : 2;
+    const pictureCopy = pictureCopyFor(meta.pictureRound, firstTrivia);
     slides.push(
       <RoundOpener
         key="r1-open"
         label="05 Round 1 Opener"
         number={1}
         title={meta.pictureRound.openerTitle}
-        subtitle={meta.pictureRound.openerSubtitle}
-        kicker={meta.pictureRound.openerKicker}
+        subtitle={pictureCopy.openerSubtitle}
+        kicker={pictureCopy.openerKicker}
         tweaks={tweaks} accent={accent}
       />
     );
@@ -124,9 +148,21 @@ function App() {
         tweaks={tweaks}
         accent={accent}
         pictureRound={meta.pictureRound}
-        nextRound={rounds[0] ? displayRoundNumber(rounds[0].n, true) : 2}
+        nextRound={firstTrivia}
       />
     );
+    // On-screen timed show (mode "screen" | "both"). Paper mode = no slide,
+    // so a paper deck composes exactly as before. Mirror: buildSlideOutline.
+    if (pictureCopy.mode !== 'paper') {
+      slides.push(
+        <PictureShowSlide
+          key="r1-show"
+          items={pictureItems}
+          pictureRound={meta.pictureRound}
+          accent={accent}
+        />
+      );
+    }
     slides.push(
       <IntermissionSlide key="int-r1" label="Intermission · Round 01"
         nextRound={rounds[0] ? displayRoundNumber(rounds[0].n, true) : undefined}
@@ -135,15 +171,26 @@ function App() {
         tweaks={tweaks} accent={rounds[0] ? accentFor(rounds[0].n, accent) : accent}
       />
     );
-    slides.push(
-      <PictureRoundRecap
-        key="r1-recap"
-        items={pictureItems}
-        tweaks={tweaks}
-        accent={accent}
-        pictureRound={meta.pictureRound}
-      />
-    );
+    // Answer walkthrough (replaced the 5×2 recap grid): two slides per slot
+    // that has a picture — the picture alone, then the reveal. After the
+    // intermission so sheets are in before answers show. Mirror:
+    // buildSlideOutline.
+    const answerSlots = walkthroughSlots(pastes);
+    answerSlots.forEach((slot, k) => {
+      [1, 2].forEach((step) => {
+        slides.push(
+          <PictureAnswerSlide
+            key={`r1-ans-${slot + 1}-${step === 1 ? 'pic' : 'reveal'}`}
+            item={pictureItems[slot]}
+            number={slot + 1}
+            step={step}
+            position={k + 1}
+            total={answerSlots.length}
+            accent={accent}
+          />
+        );
+      });
+    });
   }
 
   // Rounds 2-5 — each round picks up its own accent from ROUND_ACCENTS

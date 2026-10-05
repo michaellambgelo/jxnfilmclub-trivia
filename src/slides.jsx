@@ -1,7 +1,9 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { broadcast, useBroadcast } from './broadcast.js';
-import { resolveAspect, pictureGridLayout } from './pictures.js';
-import { DEFAULT_META } from './meta.js';
+import { useImageUrl } from './imageStore.js';
+import { initialShow, reduceShow, secondsLeft, SHOW_GAP_MS } from './pictureShow.js';
+import { playTick, playDing, isAudioUnlocked } from './chime.js';
+import { DEFAULT_META, pictureCopyFor } from './meta.js';
 
 // Rule-list numerals derived from item index — the copy itself lives in
 // meta.js ({ t, d } pairs) so hosts can edit it from the Show Setup tab.
@@ -597,13 +599,21 @@ function RoundOpener({ number, title, subtitle, kicker, label }) {
 // SLIDE: ROUND 1 PICTURE-ROUND INSTRUCTIONS
 // ============================================================
 function PictureRoundInstructions({ accent, pictureRound, nextRound = 2 }) {
-  // Step copy lives in meta.pictureRound.steps; "{nextRound}" is replaced with
-  // the display number of the first trivia round so the copy survives
-  // renumbering. Card numbers derive from index.
-  const sub = (s) => s.replace(/\{nextRound\}/g, String(nextRound));
-  const steps = pictureRound.steps.map((s, i) => ({
-    n: String(i + 1).padStart(2, "0"), t: sub(s.t), d: sub(s.d),
-  }));
+  // Step copy lives in meta.pictureRound — `steps` (paper/both) or
+  // `screenSteps` (screen); pictureCopyFor picks the set for the mode and
+  // fills the {nextRound}/{seconds}/{passes} tokens so the copy survives
+  // renumbering and timing changes. Card numbers derive from index.
+  const copy = pictureCopyFor(pictureRound, nextRound);
+  const steps = copy.steps.map((s, i) => ({ n: String(i + 1).padStart(2, "0"), ...s }));
+  const seconds = pictureRound?.showSeconds ?? DEFAULT_META.pictureRound.showSeconds;
+  // Heading + intro are mode-dependent layout chrome. The paper strings are
+  // this deck's original copy, verbatim.
+  const heading = copy.mode === "screen"
+    ? "Eyes on the Screen"
+    : copy.mode === "both" ? "On Paper and on Screen" : "On Paper, Not on Screen";
+  const intro = copy.mode === "screen"
+    ? `Each still holds on the big screen for ${seconds} seconds — no picture sheet tonight. Write each still's number and your answer on your team's answer sheet.`
+    : "This round is played from a paper sheet handed out by the hosts. Identify each image and write your answer in the space provided.";
   return (
     <section data-label="05 Round 1 Instructions">
       <div style={slideBase}>
@@ -620,17 +630,25 @@ function PictureRoundInstructions({ accent, pictureRound, nextRound = 2 }) {
             letterSpacing: "0.03em", textTransform: "uppercase",
             color: PALETTE.paper, marginTop: 20, lineHeight: 1.0,
           }}>
-            On Paper, Not on Screen
+            {heading}
           </div>
           <div style={{
             fontFamily: bodyFont, fontSize: 34,
             color: `${PALETTE.paper}B3`, marginTop: 24, maxWidth: 1200, lineHeight: 1.35,
           }}>
-            This round is played from a paper sheet handed out by the hosts. Identify each image and write your answer in the space provided.
+            {intro}
           </div>
+          {copy.note && (
+            <div style={{
+              fontFamily: bodyFont, fontWeight: 600, fontSize: 32,
+              color: accent.hex, marginTop: 14, maxWidth: 1400, lineHeight: 1.3,
+            }}>
+              {copy.note}
+            </div>
+          )}
 
           <div style={{
-            marginTop: 50, flex: 1, display: "grid",
+            marginTop: copy.note ? 36 : 50, flex: 1, display: "grid",
             gridTemplateColumns: "repeat(4, 1fr)", gap: 26,
           }}>
             {steps.map((s) => (
@@ -680,6 +698,349 @@ function PictureRoundInstructions({ accent, pictureRound, nextRound = 2 }) {
             </div>
           </div>
         </div>
+      </div>
+    </section>
+  );
+}
+
+// ============================================================
+// SLIDE: PICTURE SHOW — the on-screen, timed picture round
+// Inserted after the instructions when meta.pictureRound.mode is "screen" or
+// "both". The deck never auto-navigates: only this slide's internal state
+// advances (ready → showing … gap → showing … done), driven by the pure
+// reducer in pictureShow.js. Only the ACTIVE slide ticks, answers control
+// broadcasts, and emits `timer:state` (mode 'pictureShow').
+// ============================================================
+
+// Same isActive tracking as QuestionSlide: deck-stage marks the active
+// <section> with data-deck-active and fires a bubbling `slidechange`.
+function useSlideActive(ref) {
+  const [isActive, setIsActive] = useState(false);
+  useEffect(() => {
+    const mySection = ref.current?.closest('section');
+    if (!mySection) return;
+    setIsActive(mySection.hasAttribute('data-deck-active'));
+    const handler = (e) => setIsActive(e.detail.slide === mySection);
+    document.addEventListener('slidechange', handler);
+    return () => document.removeEventListener('slidechange', handler);
+  }, [ref]);
+  return isActive;
+}
+
+// The images the show actually plays, numbered by their slot (1-based).
+// Pasted pictures (a stored imageId or a legacy data URL) always count; a
+// slot's disk fallback (public/images/picture-NN.png) counts only if it
+// really loads — probing with Image() also rejects a dev server's HTML
+// fallback for a missing file.
+function useShowPlaylist(items) {
+  const [diskOk, setDiskOk] = useState({});
+  const probeKey = items.map((it) => (it.isPasted ? "" : it.src || "")).join("|");
+  useEffect(() => {
+    let alive = true;
+    const probes = items
+      .filter((it) => !it.isPasted && it.src)
+      .map((it) => new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve([it.src, true]);
+        img.onerror = () => resolve([it.src, false]);
+        img.src = it.src;
+      }));
+    Promise.all(probes).then((results) => {
+      if (!alive) return;
+      const ok = {};
+      results.forEach(([src, good]) => { if (good) ok[src] = true; });
+      setDiskOk(ok);
+    });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [probeKey]);
+  return items
+    .map((it, i) => ({ ...it, number: i + 1 }))
+    .filter((it) => it.isPasted || (it.src && diskOk[it.src]));
+}
+
+const pad2 = (n) => String(n).padStart(2, "0");
+
+function PictureShowSlide({ items, pictureRound, accent }) {
+  const ref = useRef(null);
+  const isActive = useSlideActive(ref);
+  const playlist = useShowPlaylist(items);
+  const count = playlist.length;
+  const pr = pictureRound || DEFAULT_META.pictureRound;
+  const showSeconds = pr.showSeconds ?? DEFAULT_META.pictureRound.showSeconds;
+  const passes = pr.showPasses ?? DEFAULT_META.pictureRound.showPasses;
+  const sound = pr.showSound ?? DEFAULT_META.pictureRound.showSound;
+
+  const [show, setShow] = useState(initialShow);
+  const [now, setNow] = useState(() => Date.now());
+  const [audioOk, setAudioOk] = useState(() => isAudioUnlocked());
+
+  const dispatch = useCallback((action) => {
+    const t = Date.now();
+    setNow(t);
+    setShow((s) => reduceShow(s, action, {
+      count, showMs: showSeconds * 1000, gapMs: SHOW_GAP_MS, passes, now: t,
+    }));
+  }, [count, showSeconds, passes]);
+
+  // Arriving or leaving resets to `ready` — a re-entered slide starts over,
+  // and nothing counts until the host presses Start.
+  useEffect(() => {
+    setShow(initialShow());
+    setNow(Date.now());
+  }, [isActive]);
+
+  // Keep a stored state valid if the image list / settings change mid-show.
+  useEffect(() => {
+    if (isActive) dispatch({ type: 'noop' });
+  }, [isActive, dispatch]);
+
+  const running = show.phase === 'showing' || show.phase === 'gap';
+  // Poll the deadline; the reducer derives everything from timestamps, so
+  // the interval's own jitter never accumulates.
+  useEffect(() => {
+    if (!isActive || !running || show.paused) return;
+    const id = setInterval(() => dispatch({ type: 'tick' }), 200);
+    return () => clearInterval(id);
+  }, [isActive, running, show.paused, dispatch]);
+
+  // Sound: one tick per image change, one ding on entering `done`. A
+  // catch-up tick that skips several images lands as ONE state change, so it
+  // makes one sound.
+  const prevKey = useRef("");
+  const segKey = `${show.phase}:${show.pass}:${show.pos}`;
+  useEffect(() => {
+    const prev = prevKey.current;
+    prevKey.current = segKey;
+    if (!isActive || !sound || prev === segKey) return;
+    if (show.phase === 'showing') playTick();
+    else if (show.phase === 'done') playDing();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [segKey]);
+
+  // "Click the display for sound" hint: re-check after any gesture here.
+  useEffect(() => {
+    if (!isActive) return;
+    setAudioOk(isAudioUnlocked());
+    const recheck = () => setTimeout(() => setAudioOk(isAudioUnlocked()), 150);
+    window.addEventListener('pointerdown', recheck);
+    window.addEventListener('keydown', recheck);
+    return () => {
+      window.removeEventListener('pointerdown', recheck);
+      window.removeEventListener('keydown', recheck);
+    };
+  }, [isActive]);
+
+  const secs = secondsLeft(show, now);
+  const pos = Math.min(show.pos, Math.max(0, count - 1));
+  const current = playlist[pos];
+  const contiguous = playlist.every((it, i) => it.number === i + 1);
+  const imageLabel = current
+    ? (contiguous
+      ? `Still ${pad2(current.number)} / ${pad2(count)}`
+      : `Still ${pad2(current.number)} · ${pos + 1} of ${count}`)
+    : "";
+  const passLabel = `Pass ${show.pass} of ${passes}`;
+  const phase = count ? show.phase : 'empty';
+
+  // State reported to the control window (Presenter → Picture Show card).
+  const payload = {
+    enabled: true, mode: 'pictureShow', phase,
+    image: current?.number ?? 0, position: count ? pos + 1 : 0, total: count,
+    pass: show.pass, passes, seconds: secs, paused: show.paused, showSeconds,
+  };
+  const payloadRef = useRef(payload);
+  payloadRef.current = payload;
+
+  useEffect(() => {
+    if (!isActive) return;
+    broadcast('timer:state', payloadRef.current);
+    // Deps list the reported primitives; the payload itself is read via ref.
+  }, [isActive, phase, pos, show.pass, secs, show.paused, count, passes, current?.number, showSeconds]);
+
+  useBroadcast(useCallback((msg) => {
+    if (!isActive) return;
+    if (msg.type === 'pictureshow:start') dispatch({ type: 'start' });
+    else if (msg.type === 'pictureshow:step') {
+      const delta = typeof msg.payload === 'number' ? msg.payload : msg.payload?.delta;
+      dispatch({ type: 'step', delta: delta < 0 ? -1 : 1 });
+    } else if (msg.type === 'timer:toggle') dispatch({ type: 'toggle' });
+    else if (msg.type === 'timer:reset') dispatch({ type: 'reset' });
+    else if (msg.type === 'timer:adjust') dispatch({ type: 'adjust', seconds: msg.payload });
+    else if (msg.type === 'sync:request') broadcast('timer:state', payloadRef.current);
+  }, [isActive, dispatch]));
+
+  const variant = phase === 'gap' || phase === 'done' ? "red" : "navy";
+  const passesText = `${passes} ${passes === 1 ? "pass" : "passes"}`;
+  const nextPass = show.pass + 1;
+  // Night Shift: the accent is already red, so the countdown runs paper-white
+  // and turns signal red for the last five seconds.
+  const countColor = secs <= 5 ? PALETTE.rust : PALETTE.paper;
+
+  const centered = (children) => (
+    <div style={{
+      flex: 1, display: "flex", flexDirection: "column",
+      alignItems: "center", justifyContent: "center", textAlign: "center",
+    }}>
+      {children}
+    </div>
+  );
+  const heroStyle = {
+    fontFamily: heroFont, fontWeight: 900, fontStyle: "italic", fontSize: 168, lineHeight: 0.95,
+    letterSpacing: "-0.01em", textTransform: "uppercase", color: PALETTE.paper, textShadow: hardShadow(10),
+  };
+  const subStyle = {
+    fontFamily: displayFont, fontWeight: 600, fontSize: 44, marginTop: 40,
+    letterSpacing: "0.14em", textTransform: "uppercase", color: PALETTE.paper,
+  };
+
+  let body;
+  if (phase === 'empty') {
+    body = centered(<>
+      <div style={{ ...heroStyle, fontSize: 120 }}>No stills loaded</div>
+      <div style={{ ...subStyle, color: `${PALETTE.paper}99`, fontSize: 34 }}>
+        Paste stills in the control window&apos;s Picture Round tab
+      </div>
+    </>);
+  } else if (phase === 'ready') {
+    body = centered(<>
+      <div style={{
+        fontFamily: displayFont, fontWeight: 600, fontSize: TYPE_SCALE.meta,
+        letterSpacing: "0.32em", textTransform: "uppercase", color: accent.hex, marginBottom: 30,
+      }}>
+        Picture Show · {count} {count === 1 ? "still" : "stills"} · {showSeconds} sec each · {passesText}
+      </div>
+      <div style={{
+        border: `3px solid ${PALETTE.inkDeep}`, background: PALETTE.paper, color: PALETTE.ink,
+        boxShadow: hardShadow(12), padding: "50px 110px",
+        fontFamily: heroFont, fontWeight: 900, fontStyle: "italic", fontSize: 150, lineHeight: 1,
+        letterSpacing: "-0.01em", textTransform: "uppercase",
+      }}>
+        Get Ready
+      </div>
+      <div style={{ ...subStyle, color: `${PALETTE.paper}B3`, fontSize: 38 }}>
+        Number your sheet · pencils up
+      </div>
+      {sound && !audioOk && (
+        <div style={{
+          marginTop: 34, fontFamily: bodyFont, fontSize: 24, color: `${PALETTE.paper}66`,
+        }}>
+          Host: click the middle of this screen once to enable sound
+        </div>
+      )}
+    </>);
+  } else if (phase === 'gap') {
+    body = centered(<>
+      <div style={{ ...subStyle, marginTop: 0, marginBottom: 30, fontSize: TYPE_SCALE.meta, letterSpacing: "0.32em" }}>
+        Pass {Math.min(nextPass, passes)} of {passes} starts in {secs}
+      </div>
+      <div style={heroStyle}>{nextPass >= 3 ? "Last look" : "Second look"}</div>
+      <div style={subStyle}>Check your answers</div>
+    </>);
+  } else if (phase === 'done') {
+    body = centered(<>
+      <div style={{ ...heroStyle, fontSize: 200 }}>Pencils down</div>
+      <div style={subStyle}>Hand your sheet to the hosts</div>
+    </>);
+  } else {
+    body = (
+      <div style={{ flex: 1, minHeight: 0, display: "flex", alignItems: "center", gap: 56, marginTop: 30 }}>
+        <div style={{
+          flex: "0 0 auto", width: 330, textAlign: "center",
+          fontFamily: displayFont, fontWeight: 700, fontSize: 300, lineHeight: 0.8,
+          color: PALETTE.paper, letterSpacing: "-0.03em",
+          textShadow: hardShadow(12, PALETTE.rustDeep),
+        }}>
+          {pad2(current?.number ?? 0)}
+        </div>
+        <div style={{
+          flex: 1, height: "100%", position: "relative",
+          background: PALETTE.inkDeep, border: `3px solid ${PALETTE.inkDeep}`,
+          boxShadow: hardShadow(10, `${PALETTE.inkDeep}99`),
+          overflow: "hidden",
+        }}>
+          {/* Every image stays mounted (decoded) so changes don't flash; only
+              the current one is visible. Captions are deliberately hidden. */}
+          {playlist.map((it, i) => (
+            <StoredImg
+              key={it.number}
+              item={it}
+              alt={`Still ${it.number}`}
+              style={{
+                position: "absolute", inset: 0, width: "100%", height: "100%",
+                objectFit: "contain", display: "block",
+                visibility: i === pos ? "visible" : "hidden",
+              }}
+            />
+          ))}
+          {show.paused && (
+            <div style={{
+              position: "absolute", top: 20, right: 20,
+              padding: "10px 22px", background: PALETTE.gold, color: PALETTE.inkDeep,
+              border: `2px solid ${PALETTE.inkDeep}`, boxShadow: hardShadow(5),
+              fontFamily: displayFont, fontWeight: 700, fontSize: 30,
+              letterSpacing: "0.2em", textTransform: "uppercase",
+            }}>
+              Paused
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <section data-label="PICTURE SHOW">
+      <div style={slideSurface(variant)} ref={ref}>
+        <Frame variant={variant} />
+
+        <div style={{
+          padding: `${SPACING.paddingTop - 20}px ${SPACING.paddingX}px 110px`,
+          height: "100%", display: "flex", flexDirection: "column", boxSizing: "border-box",
+        }}>
+          {/* Header strip */}
+          <div style={{
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            paddingBottom: 22, borderBottom: `2px solid ${PALETTE.paper}38`, minHeight: 80,
+          }}>
+            <div style={{
+              fontFamily: displayFont, fontWeight: 600, fontSize: TYPE_SCALE.meta,
+              letterSpacing: "0.28em", textTransform: "uppercase",
+              color: variant === "red" ? PALETTE.paper : accent.hex,
+            }}>
+              Round 01 · Picture Show
+              {phase === 'showing' && (
+                <>
+                  <span style={{ color: `${PALETTE.paper}99`, margin: "0 18px" }}>·</span>
+                  {imageLabel}
+                  <span style={{ color: `${PALETTE.paper}99`, margin: "0 18px" }}>·</span>
+                  <span style={{ color: `${PALETTE.paper}99` }}>{passLabel}</span>
+                </>
+              )}
+            </div>
+            {phase === 'showing' && (
+              <div style={{
+                fontFamily: displayFont, fontWeight: 700, fontSize: 80, lineHeight: 1,
+                color: countColor, textShadow: hardShadow(5),
+                fontVariantNumeric: "tabular-nums",
+              }}>
+                {secs}s
+              </div>
+            )}
+          </div>
+
+          {body}
+        </div>
+
+        <FooterBar
+          left="Round 01 · Picture Show"
+          right={phase === 'showing' ? `${imageLabel} · ${passLabel}`
+            : phase === 'done' ? "Pencils Down"
+              : phase === 'gap' ? (nextPass >= 3 ? "Last Look" : "Second Look")
+                : `${showSeconds} sec each · ${passesText}`}
+          variant={variant}
+          accentHex={accent.hex}
+        />
       </div>
     </section>
   );
@@ -1086,68 +1447,87 @@ function IntermissionSlide({ nextRound, nextTitle, nextLabel, label }) {
   );
 }
 
-function PictureRecapCell({ item, index, fit = "cover", aspect = "316 / 220" }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => { setFailed(false); }, [item.src]);
-  const showImage = item.src && !failed;
-  // The cell IS the photo box. The aspect matches the canvas handout cell so
-  // the same objectPosition produces the same visible crop on both. `fit`
-  // "cover" crops to fill; "contain" letterboxes the whole image (flag round),
-  // where panning is meaningless so the image is simply centered. The answer
-  // line that lives under each cell on the canvas is intentionally omitted on
-  // screen — it's only useful where contestants are writing.
+// ============================================================
+// PICTURE IMAGES — one <img> for a picture-round image, wherever it lives.
+// Resolution order: a stored id (IndexedDB via useImageUrl, refreshed on
+// `images:update`) → an inline data URL (legacy buffers / no IndexedDB) →
+// the slot's disk fallback → `placeholder`. Never renders a broken <img>:
+// a missing record, an unavailable store, or a failed load all fall through.
+// A component (not a hook) so callers can render it inside .map.
+// ============================================================
+function StoredImg({ id, item, alt, style, placeholder = null }) {
+  // `item` = a mergeItems() entry (slot picture); `id` = a bare image id
+  // (answer images). Exactly one is passed.
+  const imageId = item ? item.imageId : id;
+  const { url, status } = useImageUrl(imageId || null);
+  const candidates = [];
+  if (imageId) {
+    if (status === 'ready' && url) candidates.push(url);
+    else if (status === 'loading') return placeholder;
+  }
+  if (item?.dataUrl) candidates.push(item.dataUrl);
+  if (item && !imageId && !item.dataUrl && item.fallbackSrc) candidates.push(item.fallbackSrc);
+  return <FallbackImg candidates={candidates} alt={alt} style={style} placeholder={placeholder} />;
+}
+
+function FallbackImg({ candidates, alt, style, placeholder }) {
+  const key = candidates.join("|");
+  const [failed, setFailed] = useState(0);
+  useEffect(() => { setFailed(0); }, [key]);
+  const src = candidates[failed];
+  if (!src) return placeholder;
+  return (
+    <img
+      src={src}
+      alt={alt}
+      draggable={false}
+      onError={() => setFailed((n) => n + 1)}
+      style={style}
+    />
+  );
+}
+
+function PhotoPlaceholder({ size = 34 }) {
   return (
     <div style={{
-      aspectRatio: resolveAspect(aspect).css,
-      position: "relative",
-      background: `${PALETTE.paper}0D`,
-      border: `2px solid ${PALETTE.paper}47`,
-      overflow: "hidden",
+      position: "absolute", inset: 0,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontFamily: displayFont, fontSize: size, fontWeight: 600,
+      color: `${PALETTE.paper}66`, letterSpacing: "0.3em", textTransform: "uppercase",
     }}>
-      {showImage ? (
-        <img
-          src={item.src}
-          alt={item.caption || `Picture ${index + 1}`}
-          onError={() => setFailed(true)}
-          style={{
-            width: "100%", height: "100%", objectFit: fit, display: "block",
-            objectPosition: fit === "contain"
-              ? "center"
-              : `${item.position?.x ?? 50}% ${item.position?.y ?? 50}%`,
-          }}
-        />
-      ) : (
-        <div style={{
-          position: "absolute", inset: 0,
-          display: "flex", alignItems: "center", justifyContent: "center",
-        }}>
-          <div style={{
-            fontFamily: displayFont, fontSize: 28, fontWeight: 600,
-            color: `${PALETTE.paper}66`, letterSpacing: "0.3em", textTransform: "uppercase",
-          }}>
-            PHOTO
-          </div>
-        </div>
-      )}
+      PHOTO
+    </div>
+  );
+}
+
+// A framed, letterboxed image panel (picture or answer image) for the
+// answer walkthrough. `flex` sizes it in the row; the image is always
+// object-fit: contain so nothing in the answer is cropped away.
+function AnswerPanel({ id, item, alt, label, flex = 1, labelColor }) {
+  return (
+    <div style={{ flex, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={{
-        position: "absolute", top: 12, left: 12,
-        width: 50, height: 50,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        fontFamily: displayFont, fontWeight: 700, fontSize: 26,
-        color: PALETTE.paper, background: PALETTE.rust,
-        border: `2px solid ${PALETTE.inkDeep}`,
+        flex: 1, minHeight: 0, position: "relative",
+        background: PALETTE.inkDeep, border: `3px solid ${PALETTE.inkDeep}`,
+        boxShadow: hardShadow(10, `${PALETTE.inkDeep}99`), overflow: "hidden",
       }}>
-        {String(index + 1).padStart(2, "0")}
+        <StoredImg
+          id={id}
+          item={item}
+          alt={alt}
+          placeholder={<PhotoPlaceholder />}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+        />
       </div>
-      {item.caption && (
+      {label !== undefined && (
         <div style={{
-          position: "absolute", bottom: 0, left: 0, right: 0,
-          padding: "10px 14px",
-          background: `linear-gradient(180deg, transparent, ${PALETTE.inkDeep}D9)`,
-          fontFamily: bodyFont, fontSize: 28, fontWeight: 500,
-          color: PALETTE.paper, letterSpacing: "0.02em",
+          minHeight: 52, textAlign: "center",
+          fontFamily: displayFont, fontWeight: 700, fontSize: 44, lineHeight: 1.1,
+          letterSpacing: "0.04em", textTransform: "uppercase",
+          color: labelColor || PALETTE.paper,
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
         }}>
-          {item.caption}
+          {label}
         </div>
       )}
     </div>
@@ -1155,62 +1535,94 @@ function PictureRecapCell({ item, index, fit = "cover", aspect = "316 / 220" }) 
 }
 
 // ============================================================
-// SLIDE: PICTURE ROUND RECAP
-// 5×2 grid for discussing picture round answers + serves as the print
-// design for the paper handout. Cells are placeholder boxes when item.src
-// is null; render an <img> when src is present.
+// SLIDE: PICTURE ANSWER — the answer walkthrough that replaced the old 5×2
+// recap grid. App.jsx inserts TWO of these per slot that has a picture, in
+// slot order, where the recap used to sit (after the Round 1 intermission):
+//   step 1 — the picture alone, large ("Still 03 · Answer" — this deck
+//            says "still" on audience-facing slides). No answer
+//            text, labels, or answer images: the room takes one more look.
+//   step 2 — the reveal. Two answer images → A | picture | B (labels under
+//            the originals); one → picture | answer image; none → picture.
+//            The answer text (caption, or "A · B" from the labels) sits
+//            large underneath.
+// Host-advanced like every other slide. Labels "STILL 03" / "STILL 03
+// ANSWER" (mirrored by buildSlideOutline; they don't match App's timer regex,
+// so the timer card clears).
 // ============================================================
-function PictureRoundRecap({ items, accent, pictureRound }) {
-  const fit = pictureRound?.fit ?? "cover";
-  const aspect = pictureRound?.aspect ?? "316 / 220";
-  // Cap the grid width so tall aspects (square) shrink + center instead of
-  // overflowing the 2-row grid into the footer. `availH` is the vertical budget
-  // between the header and the footer; cells have no answer area on screen so
-  // cellExtra is 0. For the default landscape aspect this returns full width.
-  const grid = pictureGridLayout({
-    aspect, cols: 5, rows: 2, contentW: 1920 - SPACING.paddingX * 2,
-    availH: 560, gap: 20, cellExtra: 0,
-  });
+function PictureAnswerSlide({ item, number, step = 1, position, total, accent }) {
+  const n = pad2(number);
+  const reveal = step === 2;
+  const answerA = item.answerImageAId;
+  const answerB = item.answerImageBId;
+  const answerText = reveal ? (item.answerText || "") : "";
+  const counter = position && total ? `${pad2(position)} / ${pad2(total)}` : "";
+
+  let row;
+  if (!reveal) {
+    row = <AnswerPanel item={item} alt={`Still ${number}`} />;
+  } else if (answerA && answerB) {
+    row = (<>
+      <AnswerPanel id={answerA} alt="" label={item.answerLabelA || ""} />
+      <AnswerPanel item={item} alt={`Still ${number}`} flex={1.35} label="" />
+      <AnswerPanel id={answerB} alt="" label={item.answerLabelB || ""} />
+    </>);
+  } else if (answerA || answerB) {
+    const id = answerA || answerB;
+    const label = answerA ? item.answerLabelA : item.answerLabelB;
+    row = (<>
+      <AnswerPanel item={item} alt={`Still ${number}`} label="" />
+      <AnswerPanel id={id} alt="" label={label || ""} />
+    </>);
+  } else {
+    row = <AnswerPanel item={item} alt={`Still ${number}`} />;
+  }
+
   return (
-    <section data-label="Picture Round Recap">
+    <section data-label={reveal ? `STILL ${n} ANSWER` : `STILL ${n}`}>
       <div style={slideBase}>
         <Frame />
-
         <div style={{
-          padding: `90px ${SPACING.paddingX}px 92px`,
-          height: "100%", display: "flex", flexDirection: "column",
+          padding: `${SPACING.paddingTop - 20}px ${SPACING.paddingX}px 110px`,
+          height: "100%", display: "flex", flexDirection: "column", boxSizing: "border-box",
         }}>
-          <Eyebrow accentHex={accent.hex}>Round 01 · Recap</Eyebrow>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 28, marginTop: 18 }}>
-            <div style={{
-              fontFamily: displayFont, fontWeight: 700, fontSize: 76,
-              letterSpacing: "0.03em", textTransform: "uppercase", color: PALETTE.paper,
-            }}>
-              Picture Round
-            </div>
-            <div style={{
-              fontFamily: bodyFont, fontStyle: "italic",
-              fontSize: 32, color: `${PALETTE.paper}B3`,
-            }}>
-              {pictureRound?.instruction ?? DEFAULT_META.pictureRound.instruction}
-            </div>
-          </div>
-          <RuleBar />
-
           <div style={{
-            marginTop: 28, flex: 1, display: "grid",
-            gridTemplateColumns: "repeat(5, 1fr)", alignContent: "center",
-            gap: 20, width: grid.gridW, alignSelf: "center",
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            paddingBottom: 22, borderBottom: `2px solid ${PALETTE.paper}38`, minHeight: 80,
           }}>
-            {items.map((item, i) => (
-              <PictureRecapCell key={i} item={item} index={i} fit={fit} aspect={aspect} />
-            ))}
+            <div style={{
+              fontFamily: displayFont, fontWeight: 600, fontSize: TYPE_SCALE.meta,
+              letterSpacing: "0.28em", textTransform: "uppercase", color: accent.hex,
+            }}>
+              Still {n} · Answer
+            </div>
+            <div style={{
+              fontFamily: displayFont, fontWeight: 700, fontSize: 80, lineHeight: 1,
+              color: PALETTE.paper, textShadow: hardShadow(5, PALETTE.rustDeep),
+            }}>
+              {n}
+            </div>
           </div>
+
+          <div style={{ flex: 1, minHeight: 0, display: "flex", gap: 40, marginTop: 30 }}>
+            {row}
+          </div>
+
+          {reveal && answerText && (
+            <div style={{
+              marginTop: 26, textAlign: "center",
+              fontFamily: heroFont, fontWeight: 900, fontStyle: "italic",
+              fontSize: answerText.length > 34 ? 64 : 88, lineHeight: 1.05,
+              letterSpacing: "-0.01em", textTransform: "uppercase", color: accent.hex, textShadow: hardShadow(6),
+              overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+            }}>
+              {answerText}
+            </div>
+          )}
         </div>
 
         <FooterBar
-          left="Picture Round · Recap"
-          right={`${items.length} Photos · Discuss Answers`}
+          left="Round 01 · Still Answers"
+          right={reveal ? `Still ${n} · Answer${counter ? ` · ${counter}` : ""}` : `Still ${n}${counter ? ` · ${counter}` : ""}`}
           accentHex={accent.hex}
         />
       </div>
@@ -1438,7 +1850,7 @@ function JoinClubSlide({ accent, joinClub }) {
 
 export {
   TitleSlide, RulesSlide, PrizeSlide, CostumeContestSlide, RoundOpener,
-  PictureRoundInstructions, QuestionSlide, RoundRecap, PictureRoundRecap,
+  PictureRoundInstructions, PictureShowSlide, QuestionSlide, RoundRecap, PictureAnswerSlide,
   IntermissionSlide, TiebreakerIntroSlide, EndSlide, NextEventSlide, JoinClubSlide,
   ACCENTS, PALETTE,
 };
