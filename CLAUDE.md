@@ -8,7 +8,7 @@ Forked from `~/Workspace/pub-trivia-scaffold` (itself descended from `star-wars-
 
 ## Stack
 
-- React 18 + JSX (no TypeScript) + Vite 5
+- React 18 + JSX (no TypeScript) + Vite 8
 - Custom `<deck-stage>` web component (vanilla JS) for slide layout, nav, scaling, print
 - ESLint 9 (flat config)
 
