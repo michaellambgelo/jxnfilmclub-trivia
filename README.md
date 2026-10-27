@@ -145,7 +145,7 @@ npm run preview  # serve dist/ for verification
 npm run lint     # ESLint
 ```
 
-Stack: React 18 + JSX (no TypeScript, by intent) + Vite 5, plus a custom `<deck-stage>` web component (vanilla JS) that handles slide layout, navigation, 1920×1080 auto-scaling, and print. Inline styles only — no CSS files.
+Stack: React 18 + JSX (no TypeScript, by intent) + Vite 8, plus a custom `<deck-stage>` web component (vanilla JS) that handles slide layout, navigation, 1920×1080 auto-scaling, and print. Inline styles only — no CSS files.
 
 ## Structure
 
